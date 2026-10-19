@@ -3,10 +3,10 @@ package io.github.ddagunts.screencast.ui
 import android.app.Application
 import android.content.Intent
 import android.net.Uri
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.ddagunts.screencast.MediaPushService
+import io.github.ddagunts.screencast.StartPermissionActivity
 import io.github.ddagunts.screencast.cast.CastDevice
 import io.github.ddagunts.screencast.mediapush.DlnaDevice
 import io.github.ddagunts.screencast.mediapush.DlnaDiscovery
@@ -76,8 +76,13 @@ class MediaPushViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         _error.value = null
-        ContextCompat.startForegroundService(getApplication(), intent
+        val app = getApplication<Application>()
+        app.startActivity(Intent(app, StartPermissionActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             .setAction(MediaPushService.ACTION_START)
+            .putExtras(intent)
+            .putExtra(StartPermissionActivity.EXTRA_DESTINATION,
+                StartPermissionActivity.DESTINATION_MEDIA)
             .putExtra(MediaPushService.EXTRA_SOURCE, source)
             .putExtra(MediaPushService.EXTRA_LOCAL, local)
             .putExtra(MediaPushService.EXTRA_MIME, mime))

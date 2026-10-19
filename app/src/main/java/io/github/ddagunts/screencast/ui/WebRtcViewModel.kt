@@ -5,7 +5,7 @@ import android.content.Intent
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.ddagunts.screencast.WebRtcForegroundService
-import io.github.ddagunts.screencast.WebRtcProjectionRequestActivity
+import io.github.ddagunts.screencast.StartPermissionActivity
 import io.github.ddagunts.screencast.cast.CastDevice
 import io.github.ddagunts.screencast.cast.CastDiscovery
 import io.github.ddagunts.screencast.cast.CHROMECAST_DEFAULT_PORT
@@ -94,8 +94,11 @@ class WebRtcViewModel(app: Application) : AndroidViewModel(app) {
         val id = _appId.value
         if (id.isBlank()) return
         if (session.value != null) return
-        val intent = Intent(ctx, WebRtcProjectionRequestActivity::class.java).apply {
+        val intent = Intent(ctx, StartPermissionActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            putExtra(StartPermissionActivity.EXTRA_DESTINATION,
+                StartPermissionActivity.DESTINATION_WEBRTC)
+            putExtra(StartPermissionActivity.EXTRA_REQUEST_AUDIO, _audioEnabled.value)
             putExtra(WebRtcForegroundService.EXTRA_DEVICE_NAME, device.name)
             putExtra(WebRtcForegroundService.EXTRA_DEVICE_HOST, device.host)
             putExtra(WebRtcForegroundService.EXTRA_DEVICE_PORT, device.port)

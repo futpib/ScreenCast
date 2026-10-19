@@ -1,5 +1,7 @@
 package io.github.ddagunts.screencast.ui
 
+import android.content.Intent
+import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -32,8 +34,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Box
+import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.ddagunts.screencast.media.Resolution
 import io.github.ddagunts.screencast.media.StreamConfig
@@ -43,6 +47,7 @@ import kotlin.math.roundToInt
 
 @Composable
 fun SettingsScreen(vm: CastViewModel, webRtcVm: WebRtcViewModel) {
+    val context = LocalContext.current
     val cfg by vm.streamConfig.collectAsStateWithLifecycle()
     val activeCasts by vm.activeCasts.collectAsStateWithLifecycle()
     val webRtcSession by webRtcVm.session.collectAsStateWithLifecycle()
@@ -247,6 +252,28 @@ fun SettingsScreen(vm: CastViewModel, webRtcVm: WebRtcViewModel) {
                     onCheckedChange = { webRtcVm.setAudioEnabled(it) },
                     enabled = !webRtcCasting,
                 )
+            }
+            Text(
+                "WebRTC audio sends device playback. Its audio engine also reads microphone input, which is replaced before encoding.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        SettingCard("Permissions") {
+            Text(
+                "If you declined audio or notification access, enable it in Android's app settings. Casting video and playing media can continue without either permission.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = {
+                context.startActivity(
+                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        "package:${context.packageName}".toUri())
+                )
+            }) {
+                Text("Open app settings")
             }
         }
     }

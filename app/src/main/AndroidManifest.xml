@@ -62,6 +62,13 @@
             android:taskAffinity=""
             android:exported="false" />
 
+        <activity
+            android:name=".StartPermissionActivity"
+            android:theme="@style/Theme.Transparent"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:exported="false" />
+
         <service
             android:name=".CastForegroundService"
             android:foregroundServiceType="mediaProjection"

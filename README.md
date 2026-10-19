@@ -89,6 +89,23 @@ Switch the segmented control at the top to **Remote** to use the app as a remote
 - A Chromecast, DLNA MediaRenderer, or Android TV on the same local network,
   depending on the mode.
 
+## Permissions
+
+The app requests no runtime permissions when it opens. On the first cast,
+Android may ask to show notifications so the active foreground service can
+offer a Stop action in the notification drawer. HLS and Native mirroring also
+ask for audio recording access on Android 10+ to capture other apps' playback;
+WebRTC asks only when its Audio option is enabled. In that mode, the bundled
+WebRTC audio engine also reads microphone input, then the app replaces those
+samples with captured playback audio before encoding. Declining audio access
+leaves mirroring video-only or silent.
+Declining notification access does not block casting. A separate Android
+screen-capture consent prompt appears for each mirroring session.
+
+Choosing a local file in Media mode uses Android's document picker, which
+grants access to that file without a storage permission. Permissions declined
+at first use can be enabled later from the app's Settings screen.
+
 ## Build
 
 The Gradle wrapper is checked in. You only need a JDK 17 or 21 — Gradle itself is downloaded on first run.

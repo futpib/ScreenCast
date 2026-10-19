@@ -7,7 +7,7 @@ import androidx.lifecycle.viewModelScope
 import io.github.ddagunts.screencast.AppSettingsStore
 import io.github.ddagunts.screencast.CastForegroundService
 import io.github.ddagunts.screencast.CastMode
-import io.github.ddagunts.screencast.MediaProjectionRequestActivity
+import io.github.ddagunts.screencast.StartPermissionActivity
 import io.github.ddagunts.screencast.cast.CastDevice
 import io.github.ddagunts.screencast.cast.CastDiscovery
 import io.github.ddagunts.screencast.cast.CHROMECAST_DEFAULT_PORT
@@ -126,8 +126,11 @@ class CastViewModel(app: Application) : AndroidViewModel(app) {
             // First device — route through the trampoline so the system
             // MediaProjection consent dialog fires. Android 14+ rejects an FGS
             // of type mediaProjection that doesn't already hold a valid grant.
-            val intent = Intent(ctx, MediaProjectionRequestActivity::class.java).apply {
+            val intent = Intent(ctx, StartPermissionActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                putExtra(StartPermissionActivity.EXTRA_DESTINATION,
+                    StartPermissionActivity.DESTINATION_HLS)
+                putExtra(StartPermissionActivity.EXTRA_REQUEST_AUDIO, true)
                 putExtra(CastForegroundService.EXTRA_DEVICE_NAME, device.name)
                 putExtra(CastForegroundService.EXTRA_DEVICE_HOST, device.host)
                 putExtra(CastForegroundService.EXTRA_DEVICE_PORT, device.port)
