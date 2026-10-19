@@ -24,6 +24,10 @@ val releaseKeyPassword = signingValue("keyPassword", "SCREENCAST_KEY_PASSWORD")
 val releaseSigningReady =
     releaseKeystore != null && releaseStorePassword != null &&
     releaseKeyAlias != null && releaseKeyPassword != null
+val appVersionCode = providers.gradleProperty("releaseVersionCode").orNull?.toInt() ?: 31
+val appVersionName = providers.gradleProperty("releaseVersionName").orNull ?: "0.14.1"
+require(appVersionCode in 1..999999999) { "releaseVersionCode must be between 1 and 999999999" }
+require(appVersionName.isNotBlank()) { "releaseVersionName must not be empty" }
 
 android {
     namespace = "io.github.ddagunts.screencast"
@@ -34,8 +38,8 @@ android {
         applicationId = "io.github.ddagunts.screencast"
         minSdk = 26
         targetSdk = 36
-        versionCode = 31
-        versionName = "0.14.1"
+        versionCode = appVersionCode
+        versionName = appVersionName
     }
 
     signingConfigs {
@@ -94,12 +98,6 @@ android {
         unitTests {
             isIncludeAndroidResources = true
         }
-    }
-
-    lint {
-        // AGP 9.2.1 lint crashes in UnsafeIntentLaunchDetector while analyzing
-        // the media foreground service (Kotlin FIR has no declaration).
-        disable += "UnsafeIntentLaunch"
     }
 }
 

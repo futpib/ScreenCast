@@ -125,16 +125,20 @@ at first use can be enabled later from the app's Settings screen.
 
 ## Build
 
-The Gradle wrapper is checked in. You only need a JDK 17 or 21 — Gradle itself is downloaded on first run.
+The Gradle wrapper is checked in. Use JDK 25, Android SDK 36, NDK
+28.2.13676358, and CMake 3.22.1. Gradle itself is downloaded on first run.
 
 ```sh
-export JAVA_HOME=/path/to/jdk-21
+export JAVA_HOME=/path/to/jdk-25
 ./gradlew assembleDebug
 ```
 
 Output: `app/build/outputs/apk/debug/app-debug.apk`.
 
-Pinned to Gradle 9.6.0; tested against Android Studio's bundled JBR 21.
+The Android build uses Gradle 9.1.0, Android Gradle Plugin 9.0.1, and Kotlin
+2.3.20, matching the Android toolchain used by Iroh SSH, slopd, and zond.
+ScreenCast uses Kotlin/Compose, so it does not need Flutter or their Rust
+transport dependencies. Java and Kotlin still target Java 17 bytecode.
 
 Debug builds install side-by-side with release (`applicationId` suffix `.debug`).
 
@@ -152,6 +156,23 @@ Release builds require a keystore. Create one with `keytool -genkey -v -keystore
 2. **CI:** set env vars `SCREENCAST_KEYSTORE_FILE`, `SCREENCAST_KEYSTORE_PASSWORD`, `SCREENCAST_KEY_ALIAS`, `SCREENCAST_KEY_PASSWORD`.
 
 Then `./gradlew assembleRelease`. Without credentials `assembleRelease` still runs, but emits `app-release-unsigned.apk` — not installable. Debug builds are unaffected either way.
+
+For a signed local release with an explicit version, run
+`bash scripts/build-release.sh VERSION_NAME VERSION_CODE OUTPUT_DIRECTORY`
+after configuring signing as above. The script verifies the signature, package
+name, and version, then writes `app-release.apk` and `SHA256SUMS`.
+
+The manually triggered **Build Android APK** workflow uses the same UTC date
+version name (`yy.MM.dd.HH.mm`) and increasing Android version code as the
+Iroh SSH, slopd, and zond release workflows. It starts above this app's
+existing code 31 and any earlier `android-*+CODE` release tags. It requires
+the repository secret `KEYSTORE_BASE64`, containing the base64-encoded
+persistent keystore. The signing defaults match the other apps (`release`
+alias and `android` passwords); optional `KEY_ALIAS`, `KEYSTORE_PASSWORD`, and
+`KEY_PASSWORD` secrets override them for an existing ScreenCast key. Use the
+same signing certificate as an installed release if the new APK must update
+that installation. The workflow publishes the signed APK and its SHA-256 sum
+under an `android-VERSION_NAME+VERSION_CODE` tag.
 
 ## Project layout
 
