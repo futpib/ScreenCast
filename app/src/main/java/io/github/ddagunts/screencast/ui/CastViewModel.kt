@@ -61,11 +61,8 @@ class CastViewModel(app: Application) : AndroidViewModel(app) {
     private val _streamConfig = MutableStateFlow(store.load())
     val streamConfig: StateFlow<StreamConfig> = _streamConfig
 
-    // App-level cast mode (HLS vs WebRTC). Lives here so the single main-screen
-    // mode toggle and the Settings screen can both read/write one source of
-    // truth. The two VMs (CastViewModel, WebRtcViewModel) each still own their
-    // own discovery + session state — this flag just decides which one the
-    // main screen currently surfaces.
+    // Direct mode selection for the Advanced modes screen. Each service still
+    // owns its own discovery and session state.
     private val appSettings = AppSettingsStore(app)
     private val _castMode = MutableStateFlow(appSettings.castMode)
     val castMode: StateFlow<CastMode> = _castMode

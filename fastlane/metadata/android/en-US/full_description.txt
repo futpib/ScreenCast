@@ -1,18 +1,12 @@
-ScreenCast mirrors your Android screen to a Chromecast over the local Wi-Fi network, with no dependency on the Google Home app, Google Play Services, or the proprietary Google Cast SDK.
+ScreenCast mirrors your Android screen, plays media on a TV, and controls Android TV or Google TV from one app. It does not require Google Home, Google Play Services, or a Google account.
 
-The app implements the Cast V2 protocol directly in Kotlin: it discovers devices via mDNS, opens a TLS connection on port 8009, and speaks to the Default Media Receiver using open protobuf schemas. Captured frames are encoded with H.264 and served as an HLS stream from an embedded Ktor HTTP server on the phone; expect 5-10 seconds of latency.
+Choose what you want to do on the home screen:
 
-Features:
+* Mirror my screen: pick one TV. The app tries stock Cast Streaming, then its WebRTC receiver, then HLS if a connection fails. Android asks for screen-sharing consent on each attempt.
+* Play a file or link: choose a photo, video, or audio file, or enter a direct media URL. TVs offering both Cast and DLNA appear once; the app can retry through DLNA if Cast fails.
+* Control my TV: pair with an Android TV or Google TV for remote control.
+* Mirror to several TVs: share one HLS capture with up to four Cast receivers.
 
-* No Google account required.
-* No proprietary SDKs, analytics, or tracking.
-* Works entirely over the local Wi-Fi network.
-* Foreground service with a stop-casting notification.
-* Optional audio capture (Android 10+).
+Advanced users can select Native Cast Streaming, WebRTC, HLS, Media, or Remote directly and adjust their technical settings. Casting runs in a foreground service with a Stop action. Playback audio capture is available on Android 10 and newer, subject to Android's capture rules.
 
-Requirements:
-
-* Android 8.0 (API 26) or newer.
-* A Chromecast on the same Wi-Fi network.
-
-Status: early release - expect rough edges. Latency is high by design while this initial phase uses the built-in Default Media Receiver; a WebRTC-based low-latency mode is planned.
+Requires Android 8.0 or newer and compatible devices on the same local network. Receiver support and media formats vary by TV.

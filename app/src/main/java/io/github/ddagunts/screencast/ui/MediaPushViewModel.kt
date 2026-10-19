@@ -64,6 +64,27 @@ class MediaPushViewModel(app: Application) : AndroidViewModel(app) {
             .putExtra(MediaPushService.EXTRA_SERVICE_TYPE, device.serviceType), source, local, mime)
     }
 
+    fun startAutomatic(
+        castDevice: CastDevice?, dlnaDevice: DlnaDevice?,
+        source: String, local: Boolean, mime: String,
+    ) {
+        if (session.value != null) return
+        if (castDevice == null) {
+            if (dlnaDevice != null) startDlna(dlnaDevice, source, local, mime)
+            return
+        }
+        val intent = Intent(getApplication(), MediaPushService::class.java)
+            .putExtra(MediaPushService.EXTRA_PROTOCOL, MediaPushService.PROTOCOL_CAST)
+            .putExtra(MediaPushService.EXTRA_TARGET_NAME, castDevice.name)
+            .putExtra(MediaPushService.EXTRA_HOST, castDevice.host)
+            .putExtra(MediaPushService.EXTRA_PORT, castDevice.port)
+        if (dlnaDevice != null) {
+            intent.putExtra(MediaPushService.EXTRA_FALLBACK_CONTROL_URL, dlnaDevice.controlUrl)
+            intent.putExtra(MediaPushService.EXTRA_FALLBACK_SERVICE_TYPE, dlnaDevice.serviceType)
+        }
+        start(intent, source, local, mime)
+    }
+
     private fun start(intent: Intent, source: String, local: Boolean, mime: String) {
         if (session.value != null) return
         if (source.isBlank()) {

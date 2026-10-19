@@ -55,6 +55,7 @@ fun SettingsScreen(vm: CastViewModel, webRtcVm: WebRtcViewModel) {
     val webRtcPreset by webRtcVm.videoPreset.collectAsStateWithLifecycle()
     val webRtcBitrate by webRtcVm.maxBitrateMbps.collectAsStateWithLifecycle()
     val webRtcAudio by webRtcVm.audioEnabled.collectAsStateWithLifecycle()
+    var showAdvanced by remember { mutableStateOf(false) }
     val webRtcCasting = webRtcSession != null
     // Stream config is shared across every active session, so we can only
     // edit it when *no* casts are live. A change mid-cast would invalidate
@@ -68,6 +69,10 @@ fun SettingsScreen(vm: CastViewModel, webRtcVm: WebRtcViewModel) {
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        OutlinedButton(onClick = { showAdvanced = !showAdvanced }) {
+            Text(if (showAdvanced) "Hide advanced settings" else "Show advanced settings")
+        }
+        if (showAdvanced) {
         SettingCard("Resolution") {
             val resolutions = Resolution.entries
             val resIdx = resolutions.indexOf(cfg.resolution)
@@ -258,6 +263,7 @@ fun SettingsScreen(vm: CastViewModel, webRtcVm: WebRtcViewModel) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
         }
 
         SettingCard("Permissions") {

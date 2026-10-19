@@ -2,8 +2,8 @@ package io.github.ddagunts.screencast
 
 import android.content.Context
 
-// App-wide mode selector. The main screen has a segmented control at the
-// top with one device list visible at a time, governed by this enum:
+// Advanced mode selector. The home screen offers user goals; this enum keeps
+// direct transport selection available from Advanced modes:
 //   * HLS — Ktor stream server + the Default Media Receiver. Casts the
 //     phone screen to a Chromecast.
 //   * NATIVE — stock Cast Streaming receiver + encrypted RTP over UDP.
@@ -11,10 +11,8 @@ import android.content.Context
 //     low-latency path.
 //   * MEDIA — direct file/URL playback through Cast or DLNA.
 //   * REMOTE — Android TV / Google TV remote control over the polo
-//     pairing + remote-v2 protocols. Different target devices than HLS
-//     and WEBRTC, but the user picks "what am I trying to do" via this
-//     same segmented control rather than juggling navigation.
-// Persisted so the app opens in whichever mode was last used.
+//     pairing + remote-v2 protocols.
+// Persisted so Advanced modes reopens with the last direct selection.
 enum class CastMode {
     HLS,
     NATIVE,

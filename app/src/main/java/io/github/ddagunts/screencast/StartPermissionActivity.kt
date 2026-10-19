@@ -46,6 +46,11 @@ class StartPermissionActivity : ComponentActivity() {
     }
 
     private fun proceed() {
+        val attemptId = intent.getStringExtra(EXTRA_MIRROR_ATTEMPT_ID)
+        if (attemptId != null && !MirrorAttemptRegistry.isActive(attemptId)) {
+            finish()
+            return
+        }
         val target = when (intent.getStringExtra(EXTRA_DESTINATION)) {
             DESTINATION_HLS -> MediaProjectionRequestActivity::class.java
             DESTINATION_NATIVE -> NativeProjectionRequestActivity::class.java
@@ -68,6 +73,7 @@ class StartPermissionActivity : ComponentActivity() {
     companion object {
         const val EXTRA_DESTINATION = "start_destination"
         const val EXTRA_REQUEST_AUDIO = "request_audio"
+        const val EXTRA_MIRROR_ATTEMPT_ID = "mirror_attempt_id"
         const val DESTINATION_HLS = "hls"
         const val DESTINATION_NATIVE = "native"
         const val DESTINATION_WEBRTC = "webrtc"

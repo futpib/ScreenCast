@@ -53,7 +53,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.ddagunts.screencast.cast.CastDevice
 import kotlinx.coroutines.delay
 
-// Body for the unified main screen when cast mode is WebRTC. Renders the
+// Body for Advanced modes when cast mode is WebRTC. Renders the
 // device picker + active-session card only; App ID / resolution / bitrate /
 // audio-toggle all live in SettingsScreen now. The App-ID-missing state here
 // just disables the picker and points the user at Settings, rather than
@@ -115,7 +115,7 @@ private fun IdleWebRtcHeader(appIdMissing: Boolean) {
             Text("WebRTC mode", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(4.dp))
             Text(
-                if (appIdMissing) "Open Settings and set a custom receiver App ID to enable the picker."
+                if (appIdMissing) "Open Settings, then Show advanced settings, and set a receiver App ID."
                 else "Low-latency screen mirroring via WebRTC. Sub-second latency on typical Wi-Fi.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -283,7 +283,7 @@ private fun AvailableWebRtcSection(
 private fun FooterHint(appIdMissing: Boolean) {
     val msg = if (appIdMissing) {
         "WebRTC mode needs a custom Cast receiver App ID. The app ships with a default; " +
-            "if you've cleared it, restore it in Settings or register your own at cast.google.com."
+            "if you've cleared it, restore it under advanced settings or register your own at cast.google.com."
     } else {
         "Each cast re-prompts for screen capture consent (Android requirement). " +
             "Only one WebRTC session at a time."

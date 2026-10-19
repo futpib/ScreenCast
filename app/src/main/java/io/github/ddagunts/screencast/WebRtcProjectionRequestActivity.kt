@@ -18,6 +18,11 @@ import io.github.ddagunts.screencast.util.logI
 class WebRtcProjectionRequestActivity : ComponentActivity() {
 
     private val launcher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val attemptId = intent.getStringExtra(StartPermissionActivity.EXTRA_MIRROR_ATTEMPT_ID)
+        if (attemptId != null && !MirrorAttemptRegistry.isActive(attemptId)) {
+            finish()
+            return@registerForActivityResult
+        }
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
             logI("webrtc: projection permission granted")
             val svc = Intent(this, WebRtcForegroundService::class.java).apply {
@@ -27,7 +32,9 @@ class WebRtcProjectionRequestActivity : ComponentActivity() {
                 putExtra(WebRtcForegroundService.EXTRA_RESULT_DATA, result.data!!)
             }
             startForegroundService(svc)
+            if (attemptId != null) MirrorAttemptRegistry.report(attemptId, true)
         } else {
+            if (attemptId != null) MirrorAttemptRegistry.report(attemptId, false)
             logE("webrtc: projection permission denied")
             Toast.makeText(this, "Screen capture consent required to cast", Toast.LENGTH_SHORT).show()
         }
@@ -36,7 +43,10 @@ class WebRtcProjectionRequestActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        launcher.launch(mpm.createScreenCaptureIntent())
+        if (savedInstanceState == null) {
+            val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            launcher.launch(mpm.createCastCaptureIntent(
+                intent.hasExtra(StartPermissionActivity.EXTRA_MIRROR_ATTEMPT_ID)))
+        }
     }
 }

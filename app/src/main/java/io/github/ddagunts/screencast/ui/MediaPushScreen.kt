@@ -29,7 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @Composable
-fun MediaPushScreen(vm: MediaPushViewModel, castVm: CastViewModel) {
+fun MediaPushScreen(vm: MediaPushViewModel, castVm: CastViewModel, advanced: Boolean = false) {
     val context = LocalContext.current
     val castDevices by castVm.discovered.collectAsStateWithLifecycle()
     val dlnaDevices by vm.devices.collectAsStateWithLifecycle()
@@ -71,7 +71,7 @@ fun MediaPushScreen(vm: MediaPushViewModel, castVm: CastViewModel) {
         },
             label = { Text("Direct media URL") }, singleLine = true,
             modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = mime, onValueChange = { mime = it },
+        if (advanced) OutlinedTextField(value = mime, onValueChange = { mime = it },
             label = { Text("URL MIME type (optional)") }, singleLine = true,
             modifier = Modifier.fillMaxWidth())
         Text("Formats depend on the TV receiver. Web page URLs are not media URLs.",
@@ -80,7 +80,8 @@ fun MediaPushScreen(vm: MediaPushViewModel, castVm: CastViewModel) {
         session?.let { current ->
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("${current.protocol} → ${current.target}",
+                    Text(if (advanced) "${current.protocol} → ${current.target}"
+                        else "Playing on ${current.target}",
                         style = MaterialTheme.typography.titleSmall)
                     Text(current.title)
                     Text(current.status)
@@ -95,34 +96,54 @@ fun MediaPushScreen(vm: MediaPushViewModel, castVm: CastViewModel) {
         if (error != null) Text(error!!, color = MaterialTheme.colorScheme.error)
         if (serviceError != null) Text(serviceError!!, color = MaterialTheme.colorScheme.error)
 
-        Text("Google Cast", style = MaterialTheme.typography.titleSmall)
-        for (device in castDevices) {
-            Card(Modifier.fillMaxWidth().clickable(enabled = session == null && source.isNotBlank()) {
-                vm.startCast(device, source, fileUri != null, mime)
-            }) {
-                Column(Modifier.padding(16.dp)) {
-                    Text(device.name)
-                    Text(device.host, style = MaterialTheme.typography.bodySmall)
+        if (!advanced) {
+            Text("Available TVs", style = MaterialTheme.typography.titleSmall)
+            val targets = (castDevices.map { it.host } + dlnaDevices.map { it.host }).distinct()
+            if (targets.isEmpty()) Text("Looking for TVs on this network…")
+            for (host in targets) {
+                val castDevice = castDevices.firstOrNull { it.host == host }
+                val dlnaDevice = dlnaDevices.firstOrNull { it.host == host }
+                Card(Modifier.fillMaxWidth().clickable(enabled = session == null && source.isNotBlank()) {
+                    vm.startAutomatic(castDevice, dlnaDevice, source, fileUri != null, mime)
+                }) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text(castDevice?.name ?: dlnaDevice?.name ?: host)
+                        Text(host, style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
-        }
-        ManualHostRow("Cast IP address", castVm::addManualHost)
+            ManualHostRow("Connect by IP", castVm::addManualHost)
+            Button(onClick = vm::scan) { Text("Scan for TVs") }
+        } else {
+            Text("Google Cast", style = MaterialTheme.typography.titleSmall)
+            for (device in castDevices) {
+                Card(Modifier.fillMaxWidth().clickable(enabled = session == null && source.isNotBlank()) {
+                    vm.startCast(device, source, fileUri != null, mime)
+                }) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text(device.name)
+                        Text(device.host, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+            ManualHostRow("Cast IP address", castVm::addManualHost)
 
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("DLNA / UPnP", style = MaterialTheme.typography.titleSmall)
-            Button(onClick = vm::scan) { Text("Scan") }
-        }
-        if (dlnaDevices.isEmpty()) Text("No DLNA renderer found on this network")
-        for (device in dlnaDevices) {
-            Card(Modifier.fillMaxWidth().clickable(enabled = session == null && source.isNotBlank()) {
-                vm.startDlna(device, source, fileUri != null, mime)
-            }) {
-                Column(Modifier.padding(16.dp)) {
-                    Text(device.name)
-                    Text(device.host, style = MaterialTheme.typography.bodySmall)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("DLNA / UPnP", style = MaterialTheme.typography.titleSmall)
+                Button(onClick = vm::scan) { Text("Scan") }
+            }
+            if (dlnaDevices.isEmpty()) Text("No DLNA renderer found on this network")
+            for (device in dlnaDevices) {
+                Card(Modifier.fillMaxWidth().clickable(enabled = session == null && source.isNotBlank()) {
+                    vm.startDlna(device, source, fileUri != null, mime)
+                }) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text(device.name)
+                        Text(device.host, style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
+            ManualHostRow("DLNA device description URL", vm::addDescription)
         }
-        ManualHostRow("DLNA device description URL", vm::addDescription)
     }
 }

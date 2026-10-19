@@ -5,26 +5,43 @@ An open-source Android app that casts the phone's screen to one or more Chromeca
 ## Screenshots
 
 <p>
-  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/01-cast-idle.png" width="240" alt="Main Cast screen with HLS/WebRTC/Remote mode toggle and discovered devices" />
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/01-cast-idle.png" width="240" alt="Home screen with mirroring, media playback, and TV remote choices" />
   <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/02-settings.png" width="240" alt="Settings: resolution, segment duration, playlist window, live-edge target" />
   <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/02-settings-2.png" width="240" alt="Settings continued: sync alignment + audio capture options" />
   <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/03-webrtc-idle.png" width="240" alt="WebRTC mode — low-latency screen mirroring via a custom Cast receiver" />
   <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/04-remote-picker.png" width="240" alt="Remote mode — paired and discovered Android TV / Google TV devices" />
 </p>
 
+## Choose what you want to do
+
+The home screen offers **Mirror my screen**, **Play a file or link**, **Control my
+TV**, and **Mirror to several TVs**. For one-TV mirroring, the app tries stock
+Cast Streaming first, then its WebRTC receiver if configured, then HLS. A
+connection failure advances to the next method; cancelling screen-sharing
+consent ends the attempt. Android asks for fresh screen-sharing consent on each
+retry. The **Mirror to several TVs** button uses HLS, which can share one capture
+across up to four receivers.
+
+Media playback shows each TV once even when it advertises both Cast and DLNA.
+It tries Cast first and switches to DLNA if the Cast connection fails. The
+**Advanced modes** menu keeps direct HLS, Native, WebRTC, Media, and Remote
+selection available, and technical settings are behind **Show advanced
+settings** in Settings.
+
 ## How it works
 
 - **Discovery**: `NsdManager` finds Chromecasts via mDNS (`_googlecast._tcp.local`).
 - **Control channel**: TLS socket to Chromecast port 8009, Cast V2 protocol implemented in pure Kotlin (connection / heartbeat / receiver / media namespaces).
 - **Capture**: Android `MediaProjection` + `MediaCodec` (H.264), optional audio via `AudioPlaybackCapture`.
-- **Transport**: HLS served from an embedded Ktor HTTP server on the phone. The server binds only to the Wi-Fi interface IP on a freshly-picked ephemeral port (not `0.0.0.0:8080`), so it isn't reachable over cellular or any other interface. The playlist lives under a path gated by a 128-bit random token (e.g. `http://<phone-ip>:<port>/c/<token>/stream.m3u8`); the token is generated fresh per cast session and is only valid while the foreground service is running. The Chromecast loads that URL through the Default Media Receiver (App ID `CC1AD845`). Expect ~5–10 s of latency.
+- **HLS transport**: Used for several TVs and as a one-TV fallback. HLS is served from an embedded Ktor HTTP server on the phone. The server binds only to the Wi-Fi interface IP on a freshly-picked ephemeral port (not `0.0.0.0:8080`), so it isn't reachable over cellular or any other interface. The playlist lives under a path gated by a 128-bit random token (e.g. `http://<phone-ip>:<port>/c/<token>/stream.m3u8`); the token is generated fresh per cast session and is only valid while the foreground service is running. The Chromecast loads that URL through the Default Media Receiver (App ID `CC1AD845`). Expect ~5–10 s of latency.
 - **Multi-device casting**: Up to 4 Chromecasts can subscribe to the same HLS stream in parallel. Each has its own Cast V2 session, transport controls, and volume. The capture pipeline is started once on the first device and reused for the rest, so adding a second receiver doesn't retrigger the MediaProjection consent dialog.
-- **Sync across receivers**: HLS LIVE doesn't give receivers a shared clock, so by default each one picks its own live-edge and they drift. With **Sync start** enabled (Settings), the app coordinates a pause → seek → play handshake whenever a new device joins so every receiver lands on the same stream offset. A background loop then re-aligns every ~15 s: it polls `currentTime` on every session, pauses them all, seeks to the laggard's offset, and plays them back in parallel. This is best-effort — receiver-local offsets are only comparable while sessions stay connected.
+- **Sync across receivers**: HLS LIVE doesn't give receivers a shared clock, so by default each one picks its own live-edge and they drift. With **Sync start** enabled (Settings → Show advanced settings), the app coordinates a pause → seek → play handshake whenever a new device joins so every receiver lands on the same stream offset. A background loop then re-aligns every ~15 s: it polls `currentTime` on every session, pauses them all, seeks to the laggard's offset, and plays them back in parallel. This is best-effort — receiver-local offsets are only comparable while sessions stay connected.
 
 
 ## Native Cast mirroring
 
-Choose **Native** on the main screen to mirror the screen to a stock Cast receiver.
+Choose **Mirror my screen** to try this path first on a stock Cast receiver, or
+select **Native** directly from Advanced modes.
 This mode launches the stock Android mirroring receiver (`674A0243`, with the
 default Cast Streaming receiver `0F5096E8` as a fallback), negotiates a
 Cast Streaming `OFFER`/`ANSWER`, and sends H.264 video and Opus playback audio
@@ -42,9 +59,9 @@ The bundled [Opus 1.5.2 source](app/src/main/cpp/opus) is licensed under its
 
 ## Media playback on a TV
 
-Choose **Media** to play a photo, video, or audio file on one TV. Select a file
-with Android's document picker or enter a direct HTTP(S) media URL, then tap a
-Google Cast or DLNA receiver. A web page URL will not work; the receiver must
+Choose **Play a file or link** to play a photo, video, or audio file on one TV.
+Select a file with Android's document picker or enter a direct HTTP(S) media
+URL, then tap a TV. A web page URL will not work; the receiver must
 be able to fetch and decode the media itself. This mode does not mirror the
 phone screen or transcode files.
 
@@ -63,9 +80,9 @@ phone screen or transcode files.
 
 ## WebRTC mode (low-latency) — optional
 
-The default cast path is HLS over HTTP; latency is ~5–10 s. A separate **WebRTC** mode ships alongside it for sub-second latency. Choose it from the mode row on the main screen.
+HLS over HTTP has ~5–10 s of latency. A separate **WebRTC** path ships alongside it for sub-second latency. One-TV automatic mirroring tries WebRTC after a failed stock Cast Streaming connection, or you can select it directly from Advanced modes.
 
-WebRTC mode uses a **custom Cast receiver**. The app ships with a default App ID (`9098830C`) pointing at the project's hosted receiver, so it works out of the box. If you'd rather host your own receiver, register its URL at <https://cast.google.com/publish/> and paste the resulting 8-character App ID into Settings. Static receiver page + instructions live in [`receiver/`](receiver/). When you start a cast the app launches the receiver, negotiates a `RTCPeerConnection` over the Cast channel, and streams the screen directly. No HLS server, no drift/sync coordination, no multi-device fan-out.
+WebRTC mode uses a **custom Cast receiver**. The app ships with a default App ID (`9098830C`) pointing at the project's hosted receiver, so it works out of the box. If you'd rather host your own receiver, register its URL at <https://cast.google.com/publish/> and paste the resulting 8-character App ID into Settings → Show advanced settings. Static receiver page + instructions live in [`receiver/`](receiver/). When you start a cast the app launches the receiver, negotiates a `RTCPeerConnection` over the Cast channel, and streams the screen directly. No HLS server, no drift/sync coordination, no multi-device fan-out.
 
 Tradeoffs versus HLS mode:
 
@@ -75,7 +92,7 @@ Tradeoffs versus HLS mode:
 
 ## Remote control mode
 
-Switch the segmented control at the top to **Remote** to use the app as a remote for an Android TV / Google TV — the same role the Google Home app plays. No proprietary dependencies; the polo pairing handshake and the Android TV Remote v2 control channel are implemented in pure Kotlin against schemas vendored from [tronikos/androidtvremote2](https://github.com/tronikos/androidtvremote2).
+Choose **Control my TV** to use the app as a remote for an Android TV / Google TV — the same role the Google Home app plays. No proprietary dependencies; the polo pairing handshake and the Android TV Remote v2 control channel are implemented in pure Kotlin against schemas vendored from [tronikos/androidtvremote2](https://github.com/tronikos/androidtvremote2).
 
 - **Discovery**: `NsdManager` finds TVs via mDNS (`_androidtvremote2._tcp.local`) — independent of the Chromecast discovery used by the cast modes.
 - **Pairing (one-time)**: TLS connect to port 6467, then a 6-step polo handshake (request → options → configuration → ack → secret → ack). The TV displays a 6-digit hex code on screen; you type it into the dialog on the phone. The app generates a per-install RSA-2048 client cert (no BouncyCastle — hand-rolled X.509 v3 DER) and stores it under [androidx.security `EncryptedFile`](https://developer.android.com/topic/security/data) with a Keystore-derived AES-256-GCM master key. The TV's server cert SHA-256 is pinned in app-private SharedPreferences for subsequent connections.

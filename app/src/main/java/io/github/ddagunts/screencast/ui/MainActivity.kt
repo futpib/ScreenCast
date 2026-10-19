@@ -1,12 +1,16 @@
 package io.github.ddagunts.screencast.ui
 
+import android.app.Activity
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Column
@@ -19,6 +23,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -34,6 +39,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -43,6 +49,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.ddagunts.screencast.CastMode
 
@@ -53,12 +60,13 @@ class MainActivity : ComponentActivity() {
     private val atvVm: AndroidTvViewModel by viewModels()
     private val nativeVm: NativeCastViewModel by viewModels()
     private val mediaVm: MediaPushViewModel by viewModels()
+    private val mirrorVm: MirrorIntentViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             ScreenCastTheme {
-                Surface(Modifier.fillMaxSize()) { AppScaffold(vm, webRtcVm, atvVm, nativeVm, mediaVm) }
+                Surface(Modifier.fillMaxSize()) { AppScaffold(vm, webRtcVm, atvVm, nativeVm, mediaVm, mirrorVm) }
             }
         }
     }
@@ -73,9 +81,18 @@ private fun ScreenCastTheme(content: @Composable () -> Unit) {
     // LocalConfiguration (not ctx.resources.configuration) so recomposition
     // fires when the user toggles dark mode without restarting the Activity.
     val uiMode = LocalConfiguration.current.uiMode
+    val lightSystemBars = uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_NO
+    SideEffect {
+        (ctx as? Activity)?.window?.let { window ->
+            WindowCompat.getInsetsController(window, window.decorView).apply {
+                isAppearanceLightStatusBars = lightSystemBars
+                isAppearanceLightNavigationBars = lightSystemBars
+            }
+        }
+    }
     val colors = when {
         Build.VERSION.SDK_INT >= 31 &&
-            uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_NO ->
+            lightSystemBars ->
                 dynamicLightColorScheme(ctx)
         Build.VERSION.SDK_INT >= 31 -> dynamicDarkColorScheme(ctx)
         else -> darkColorScheme()
@@ -83,7 +100,7 @@ private fun ScreenCastTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = colors, content = content)
 }
 
-private enum class Screen { Cast, Settings, Logs }
+private enum class Screen { Home, Mirror, MultiMirror, Media, Remote, Advanced, Settings, Logs }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -93,36 +110,54 @@ private fun AppScaffold(
     atvVm: AndroidTvViewModel,
     nativeVm: NativeCastViewModel,
     mediaVm: MediaPushViewModel,
+    mirrorVm: MirrorIntentViewModel,
 ) {
-    var screen by rememberSaveable { mutableStateOf(Screen.Cast) }
+    var screen by rememberSaveable { mutableStateOf(Screen.Home) }
+    BackHandler(enabled = screen != Screen.Home) { screen = Screen.Home }
     val castMode by vm.castMode.collectAsStateWithLifecycle()
     Scaffold(topBar = {
         TopAppBar(
             title = {
                 Text(when (screen) {
-                    Screen.Cast -> "ScreenCast"
+                    Screen.Home -> "ScreenCast"
+                    Screen.Mirror -> "Mirror screen"
+                    Screen.MultiMirror -> "Mirror to several TVs"
+                    Screen.Media -> "Play media"
+                    Screen.Remote -> "TV remote"
+                    Screen.Advanced -> "Advanced modes"
                     Screen.Settings -> "Settings"
                     Screen.Logs -> "Logs"
                 })
             },
             navigationIcon = {
-                if (screen != Screen.Cast) {
-                    IconButton(onClick = { screen = Screen.Cast }) {
+                if (screen != Screen.Home) {
+                    IconButton(onClick = { screen = Screen.Home }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
             },
             actions = {
-                if (screen == Screen.Cast) CastScreenActions(
+                if (screen == Screen.Home) CastScreenActions(
                     onOpenSettings = { screen = Screen.Settings },
                     onOpenLogs = { screen = Screen.Logs },
+                    onOpenAdvanced = { screen = Screen.Advanced },
                 )
             },
         )
     }) { pad ->
         Box(Modifier.fillMaxSize().padding(pad)) {
             when (screen) {
-                Screen.Cast -> CastScreenRoot(
+                Screen.Home -> IntentHomeScreen(
+                    onMirror = { screen = Screen.Mirror },
+                    onMultiMirror = { screen = Screen.MultiMirror },
+                    onMedia = { screen = Screen.Media },
+                    onRemote = { screen = Screen.Remote },
+                )
+                Screen.Mirror -> MirrorIntentScreen(mirrorVm, webRtcVm)
+                Screen.MultiMirror -> CastControlScreen(vm)
+                Screen.Media -> MediaPushScreen(mediaVm, vm)
+                Screen.Remote -> AndroidTvRemoteScreen(atvVm)
+                Screen.Advanced -> CastScreenRoot(
                     castMode = castMode,
                     onModeChange = { vm.setCastMode(it) },
                     vm = vm,
@@ -138,11 +173,33 @@ private fun AppScaffold(
     }
 }
 
-// Single unified main screen. Mode toggle at the top, the selected mode's
-// device picker + active-session UI below. The VMs stay alive so
-// switching modes is instant and doesn't drop in-flight discovery — the
-// ATV discovery in particular benefits, since the TVs sometimes take a
-// few seconds to respond to the first mDNS query after boot.
+@Composable
+private fun IntentHomeScreen(
+    onMirror: () -> Unit,
+    onMultiMirror: () -> Unit,
+    onMedia: () -> Unit,
+    onRemote: () -> Unit,
+) {
+    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        IntentCard("Mirror my screen", "Show this phone on one TV.", onMirror)
+        IntentCard("Play a file or link", "Send a photo, video, or audio file to a TV.", onMedia)
+        IntentCard("Control my TV", "Use your phone as an Android TV remote.", onRemote)
+        IntentCard("Mirror to several TVs", "Show the same screen on multiple TVs.", onMultiMirror)
+    }
+}
+
+@Composable
+private fun IntentCard(title: String, description: String, onClick: () -> Unit) {
+    ElevatedCard(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
+        Column(Modifier.padding(16.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(description, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+// Direct transport selection for users who need to choose a specific method.
+// The ViewModels remain alive when this screen is hidden, preserving discovery.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CastScreenRoot(
@@ -182,7 +239,7 @@ private fun CastScreenRoot(
             CastMode.WEBRTC -> WebRtcCastBody(webRtcVm)
             CastMode.REMOTE -> AndroidTvRemoteScreen(atvVm)
             CastMode.NATIVE -> NativeCastBody(nativeVm, webRtcVm)
-            CastMode.MEDIA -> MediaPushScreen(mediaVm, vm)
+            CastMode.MEDIA -> MediaPushScreen(mediaVm, vm, advanced = true)
         }
     }
 }
@@ -191,6 +248,7 @@ private fun CastScreenRoot(
 private fun CastScreenActions(
     onOpenSettings: () -> Unit,
     onOpenLogs: () -> Unit,
+    onOpenAdvanced: () -> Unit,
 ) {
     IconButton(onClick = onOpenSettings) {
         Icon(Icons.Filled.Settings, contentDescription = "Settings")
@@ -200,6 +258,10 @@ private fun CastScreenActions(
         Icon(Icons.Filled.MoreVert, contentDescription = "More")
     }
     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+        DropdownMenuItem(
+            text = { Text("Advanced modes") },
+            onClick = { menuOpen = false; onOpenAdvanced() },
+        )
         DropdownMenuItem(
             text = { Text("Logs") },
             onClick = { menuOpen = false; onOpenLogs() },

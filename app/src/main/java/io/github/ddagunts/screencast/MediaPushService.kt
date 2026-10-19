@@ -101,27 +101,47 @@ class MediaPushService : Service() {
                     val session = CastSession(CastDevice(name, host,
                         intent.getIntExtra(EXTRA_PORT, 8009)))
                     cast = session
-                    session.startCast(DEFAULT_MEDIA_RECEIVER, mediaUrl, item.mimeType,
-                        streamType = item.streamType, title = item.title)
-                    if (session.state.value is CastState.Error)
-                        error((session.state.value as CastState.Error).message)
-                    publish(Snapshot(name, protocol, item.title, "Loading"))
-                    stateJob = scope.launch {
-                        combine(session.state, session.playerState) { state, player -> state to player }
-                            .collect { (state, player) ->
-                            when (state) {
-                                is CastState.Error -> publish(Snapshot(name, protocol, item.title,
-                                    "Error: ${state.message}"))
-                                is CastState.Casting -> publish(Snapshot(name, protocol, item.title,
-                                    when (player) {
-                                        "PLAYING" -> "Playing"
-                                        "PAUSED" -> "Paused"
-                                        "BUFFERING" -> "Buffering"
-                                        else -> "Loading"
-                                    }))
-                                else -> Unit
+                    try {
+                        session.startCast(DEFAULT_MEDIA_RECEIVER, mediaUrl, item.mimeType,
+                            streamType = item.streamType, title = item.title)
+                        if (session.state.value is CastState.Error)
+                            error((session.state.value as CastState.Error).message)
+                        publish(Snapshot(name, protocol, item.title, "Loading"))
+                        stateJob = scope.launch {
+                            combine(session.state, session.playerState) { state, player -> state to player }
+                                .collect { (state, player) ->
+                                when (state) {
+                                    is CastState.Error -> {
+                                        if (active && intent.hasExtra(EXTRA_FALLBACK_CONTROL_URL) &&
+                                            intent.hasExtra(EXTRA_FALLBACK_SERVICE_TYPE)) {
+                                            stateJob?.cancel()
+                                            scope.launch {
+                                                try {
+                                                    tryDlnaFallback(intent, name, host, item, mediaUrl)
+                                                } catch (_: CancellationException) {
+                                                    // A user stop cancels the service scope.
+                                                } catch (e: Exception) {
+                                                    failActive(e)
+                                                }
+                                            }
+                                        } else publish(Snapshot(name, protocol, item.title,
+                                            "Error: ${state.message}"))
+                                    }
+                                    is CastState.Casting -> publish(Snapshot(name, protocol, item.title,
+                                        when (player) {
+                                            "PLAYING" -> "Playing"
+                                            "PAUSED" -> "Paused"
+                                            "BUFFERING" -> "Buffering"
+                                            else -> "Loading"
+                                        }))
+                                    else -> Unit
+                                }
                             }
                         }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        if (!tryDlnaFallback(intent, name, host, item, mediaUrl)) throw e
                     }
                 } else if (protocol == PROTOCOL_DLNA) {
                     val client = DlnaClient(DlnaDevice(name,
@@ -135,14 +155,33 @@ class MediaPushService : Service() {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _error.value = e.message ?: e.javaClass.simpleName
-                releaseSession(stopReceiver = false)
-                _session.value = null
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                active = false
-                stopSelf()
+                failActive(e)
             }
         }
+    }
+
+    private suspend fun tryDlnaFallback(
+        intent: Intent, name: String, host: String, item: MediaItem, mediaUrl: String,
+    ): Boolean {
+        val controlUrl = intent.getStringExtra(EXTRA_FALLBACK_CONTROL_URL) ?: return false
+        val serviceType = intent.getStringExtra(EXTRA_FALLBACK_SERVICE_TYPE) ?: return false
+        runCatching { cast?.stopAndClose() }
+        cast = null
+        publish(Snapshot(name, PROTOCOL_DLNA, item.title, "Trying another connection"))
+        val client = DlnaClient(DlnaDevice(name, host, controlUrl, serviceType))
+        dlna = client
+        client.loadAndPlay(item, mediaUrl)
+        publish(Snapshot(name, PROTOCOL_DLNA, item.title, "Playback requested"))
+        return true
+    }
+
+    private suspend fun failActive(error: Throwable) {
+        _error.value = error.message ?: error.javaClass.simpleName
+        releaseSession(stopReceiver = false)
+        _session.value = null
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        active = false
+        stopSelf()
     }
 
     private fun publish(value: Snapshot) {
@@ -152,11 +191,11 @@ class MediaPushService : Service() {
     }
 
     private suspend fun stopSession() {
+        active = false
         startJob?.cancelAndJoin()
         startJob = null
         releaseSession(stopReceiver = true)
         _session.value = null
-        active = false
         stopForeground(STOP_FOREGROUND_REMOVE)
     }
 
@@ -211,6 +250,8 @@ class MediaPushService : Service() {
         const val EXTRA_PORT = "port"
         const val EXTRA_CONTROL_URL = "control_url"
         const val EXTRA_SERVICE_TYPE = "service_type"
+        const val EXTRA_FALLBACK_CONTROL_URL = "fallback_control_url"
+        const val EXTRA_FALLBACK_SERVICE_TYPE = "fallback_service_type"
         const val EXTRA_SOURCE = "source"
         const val EXTRA_LOCAL = "local"
         const val EXTRA_MIME = "mime"
