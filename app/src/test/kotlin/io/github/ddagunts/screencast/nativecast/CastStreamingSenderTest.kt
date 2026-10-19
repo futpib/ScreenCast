@@ -2,6 +2,7 @@ package io.github.ddagunts.screencast.nativecast
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -51,6 +52,37 @@ class CastStreamingSenderTest {
             }
         }
     }
+
+    @Test fun audioAndVideoUseOneSocketAndDistinctRtpClocks() {
+        DatagramSocket(0, InetAddress.getLoopbackAddress()).use { receiver ->
+            receiver.soTimeout = 3_000
+            val video = CastStreamingProtocol.VideoStream(
+                0x12345678, ByteArray(16), ByteArray(16), 1280, 720, 30, 3_000_000)
+            val audio = CastStreamingProtocol.AudioStream(
+                0x55667788, ByteArray(16), ByteArray(16))
+            val sender = CastStreamingSender("127.0.0.1", receiver.localPort, video, audio) {}
+            try {
+                sender.start()
+                sender.sendAudio(byteArrayOf(1, 2, 3), 1_000_000)
+                sender.sendVideo(byteArrayOf(4, 5, 6), 1_000_000, true)
+                val packets = mutableMapOf<Int, DatagramPacket>()
+                while (packets.size < 2) {
+                    val packet = DatagramPacket(ByteArray(1500), 1500)
+                    receiver.receive(packet)
+                    val payload = packet.data[1].toInt() and 0x7f
+                    if (payload == 96 || payload == 127) packets[payload] = packet
+                }
+                assertEquals(packets[96]!!.port, packets[127]!!.port)
+                assertEquals(90_000, readInt(packets[96]!!.data, 4))
+                assertEquals(48_000, readInt(packets[127]!!.data, 4))
+            } finally {
+                sender.stop()
+            }
+        }
+    }
+
+    private fun readInt(bytes: ByteArray, at: Int) =
+        ByteBuffer.wrap(bytes, at, 4).order(ByteOrder.BIG_ENDIAN).int
 
     private fun receiveRtp(socket: DatagramSocket): DatagramPacket {
         while (true) {

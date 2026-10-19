@@ -45,11 +45,13 @@ internal class NativeCastSession(private val context: Context, val device: CastD
     private val launched = CompletableDeferred<App>()
     private val answered = CompletableDeferred<JSONObject>()
     private val stream = CastStreamingProtocol.VideoStream.random(1280, 720, 30, 3_000_000)
+    private val audioStream = CastStreamingProtocol.AudioStream.random()
     private val _state = MutableStateFlow("CONNECTING")
     val state: StateFlow<String> = _state
     private var app: App? = null
     private var sender: CastStreamingSender? = null
     private var encoder: VideoEncoder? = null
+    private var audioEncoder: OpusPlaybackEncoder? = null
     private var capture: ScreenCapture? = null
     private var projection: MediaProjection? = null
     private var lastHeartbeat = System.currentTimeMillis()
@@ -82,22 +84,34 @@ internal class NativeCastSession(private val context: Context, val device: CastD
             app = target
             channel.send(connectMsg(target.transportId))
             _state.value = "NEGOTIATING"
-            val offer = CastStreamingProtocol.offer(1, stream)
+            val mp = createProjection(resultCode, projectionData, onProjectionStopped)
+            audioEncoder = OpusPlaybackEncoder.prepare(context, mp)
+            val offeredAudio = audioEncoder != null
+            val offer = CastStreamingProtocol.offer(1, stream,
+                if (offeredAudio) audioStream else null)
             channel.send(CastMessage(SENDER_ID, target.transportId,
                 CastStreamingProtocol.NAMESPACE, offer.toString()))
             val answer = withTimeoutOrNull(10_000) { answered.await() }
                 ?: error("receiver did not answer the streaming offer")
-            val port = CastStreamingProtocol.answerPort(answer, 1)
-            val mediaSender = CastStreamingSender(device.host, port, stream) { encoder?.requestKeyFrame() }
+            val accepted = CastStreamingProtocol.answer(answer, 1, if (offeredAudio) 1 else 0)
+            if (!accepted.audioAccepted) {
+                audioEncoder?.stop()
+                audioEncoder = null
+            }
+            val mediaSender = CastStreamingSender(device.host, accepted.port, stream,
+                if (accepted.audioAccepted) audioStream else null) { encoder?.requestKeyFrame() }
             sender = mediaSender
             mediaSender.start()
-            startCapture(resultCode, projectionData, onProjectionStopped)
+            startCapture(mp)
+            audioEncoder?.start(
+                onFrame = { data, ptsUs -> sender?.sendAudio(data, ptsUs) },
+                onFailure = ::fail)
             _state.value = "SENDING"
             scope.launch {
                 repeat(100) {
                     if (stopped || _state.value.startsWith("ERROR")) return@launch
                     if (sender?.acknowledged == true) {
-                        _state.value = "CASTING"
+                        _state.value = if (audioEncoder != null) "CASTING (video + audio)" else "CASTING (video only)"
                         return@launch
                     }
                     delay(100)
@@ -122,7 +136,7 @@ internal class NativeCastSession(private val context: Context, val device: CastD
         }
     }
 
-    private fun startCapture(resultCode: Int, projectionData: Intent, onStopped: () -> Unit) {
+    private fun createProjection(resultCode: Int, projectionData: Intent, onStopped: () -> Unit): MediaProjection {
         val mpm = context.getSystemService(MediaProjectionManager::class.java)
         val mp = mpm.getMediaProjection(resultCode, projectionData)
             ?: error("screen projection was not granted")
@@ -132,6 +146,10 @@ internal class NativeCastSession(private val context: Context, val device: CastD
                 if (!stopped && !_state.value.startsWith("ERROR")) onStopped()
             }
         }, Handler(Looper.getMainLooper()))
+        return mp
+    }
+
+    private fun startCapture(mp: MediaProjection) {
         val video = VideoEncoder(stream.width, stream.height, stream.fps, stream.bitRate,
             keyframeIntervalSec = 1)
         encoder = video
@@ -217,6 +235,7 @@ internal class NativeCastSession(private val context: Context, val device: CastD
     }
 
     @Synchronized private fun releaseMedia() {
+        runCatching { audioEncoder?.stop() }; audioEncoder = null
         runCatching { capture?.stop() }; capture = null
         runCatching { encoder?.stop() }; encoder = null
         runCatching { sender?.stop() }; sender = null

@@ -33,7 +33,7 @@ fun NativeCastBody(nativeVm: NativeCastViewModel, devicesVm: WebRtcViewModel) {
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Native Cast mirroring", style = MaterialTheme.typography.titleMedium)
-                Text("Streams the screen directly to a stock Cast receiver over UDP. Video only for now.",
+                Text("Streams screen video and capturable media or game audio directly to a stock Cast receiver over UDP.",
                     style = MaterialTheme.typography.bodySmall)
                 session?.let { current ->
                     Text("${current.device.name}: ${current.status}")

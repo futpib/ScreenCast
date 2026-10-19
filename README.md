@@ -24,15 +24,21 @@ An open-source Android app that casts the phone's screen to one or more Chromeca
 
 ## Native Cast mirroring
 
-Choose **Native** on the main screen to mirror video to a stock Cast receiver.
+Choose **Native** on the main screen to mirror the screen to a stock Cast receiver.
 This mode launches the stock Android mirroring receiver (`674A0243`, with the
 default Cast Streaming receiver `0F5096E8` as a fallback), negotiates a
-Cast Streaming `OFFER`/`ANSWER`, and sends H.264 frames as encrypted Cast RTP
-over UDP. RTCP sender reports, acknowledgements, retransmissions, and keyframe
-requests are handled in the app. It uses neither the HLS playlist nor the
-custom WebRTC receiver. It casts to one device at a time and currently carries
-video only. The receiver's target playout delay is 200 ms; actual latency
-depends on the device and network and has not been measured on a physical TV.
+Cast Streaming `OFFER`/`ANSWER`, and sends H.264 video and Opus playback audio
+as encrypted Cast RTP over UDP. Both streams share one UDP socket. The app
+handles RTCP sender reports, acknowledgements, retransmissions, and keyframe
+requests. It uses neither the HLS playlist nor the custom WebRTC receiver. It
+casts to one device at a time. Playback audio capture requires Android 10+ and
+the audio permission. A bundled libopus encoder produces 10 ms audio packets.
+If audio capture is unavailable or the receiver declines it, the app sends video
+only. Android's playback capture rules limit which apps' sound can be captured.
+The receiver's target playout delay is 200 ms; actual latency depends on the
+device and network. Audio and video were tested against a stock MiTV-MOEU0 receiver.
+The bundled [Opus 1.5.2 source](app/src/main/cpp/opus) is licensed under its
+[BSD license](app/src/main/cpp/opus/COPYING).
 
 ## WebRTC mode (low-latency) — optional
 

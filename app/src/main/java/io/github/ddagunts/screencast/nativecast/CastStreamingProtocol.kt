@@ -17,6 +17,8 @@ internal object CastStreamingProtocol {
     const val ANDROID_MIRRORING_APP = "674A0243"
     const val MIRRORING_APP = "0F5096E8"
     const val VIDEO_PAYLOAD_TYPE = 96
+    const val AUDIO_PAYLOAD_TYPE = 127
+    const val AUDIO_SAMPLE_RATE = 48_000
     const val TARGET_DELAY_MS = 200
     const val MAX_PACKET_BYTES = 1472
     private const val MAX_PAYLOAD_BYTES = MAX_PACKET_BYTES - 23
@@ -37,19 +39,44 @@ internal object CastStreamingProtocol {
         companion object {
             fun random(width: Int, height: Int, fps: Int, bitRate: Int): VideoStream {
                 val rng = SecureRandom()
-                return VideoStream(rng.nextInt(), ByteArray(16).also(rng::nextBytes),
+                return VideoStream(rng.nextInt(Int.MAX_VALUE - 1) + 1,
+                    ByteArray(16).also(rng::nextBytes),
                     ByteArray(16).also(rng::nextBytes), width, height, fps, bitRate)
             }
         }
     }
 
-    fun offer(seqNum: Int, stream: VideoStream): JSONObject = JSONObject()
-        .put("type", "OFFER")
-        .put("seqNum", seqNum)
-        .put("offer", JSONObject()
-            .put("castMode", "mirroring")
-            .put("supportedStreams", JSONArray().put(JSONObject()
-                .put("index", 0)
+    data class AudioStream(val ssrc: Int, val key: ByteArray, val ivMask: ByteArray) {
+        init { require(key.size == 16 && ivMask.size == 16) }
+
+        companion object {
+            fun random(): AudioStream {
+                val rng = SecureRandom()
+                return AudioStream(rng.nextInt(Int.MAX_VALUE - 1) + 1,
+                    ByteArray(16).also(rng::nextBytes),
+                    ByteArray(16).also(rng::nextBytes))
+            }
+        }
+    }
+
+    fun offer(seqNum: Int, stream: VideoStream, audio: AudioStream? = null): JSONObject {
+        val streams = JSONArray()
+        if (audio != null) streams.put(JSONObject()
+            .put("index", 0)
+            .put("type", "audio_source")
+            .put("codecName", "opus")
+            .put("rtpProfile", "cast")
+            .put("rtpPayloadType", AUDIO_PAYLOAD_TYPE)
+            .put("ssrc", audio.ssrc.toLong() and 0xffffffffL)
+            .put("targetDelay", TARGET_DELAY_MS)
+            .put("aesKey", audio.key.toHex())
+            .put("aesIvMask", audio.ivMask.toHex())
+            .put("timeBase", "1/$AUDIO_SAMPLE_RATE")
+            .put("channels", 2)
+            .put("bitRate", 128_000)
+            .put("receiverRtcpEventLog", false))
+        streams.put(JSONObject()
+                .put("index", if (audio == null) 0 else 1)
                 .put("type", "video_source")
                 .put("codecName", "h264")
                 .put("rtpProfile", "cast")
@@ -69,9 +96,18 @@ internal object CastStreamingProtocol {
                 })
                 .put("resolutions", JSONArray().put(JSONObject()
                     .put("width", stream.width).put("height", stream.height)))
-                .put("receiverRtcpEventLog", false))))
+                .put("receiverRtcpEventLog", false))
+        return JSONObject()
+        .put("type", "OFFER")
+        .put("seqNum", seqNum)
+        .put("offer", JSONObject()
+            .put("castMode", "mirroring")
+            .put("supportedStreams", streams))
+    }
 
-    fun answerPort(message: JSONObject, expectedSeq: Int): Int {
+    data class Answer(val port: Int, val audioAccepted: Boolean)
+
+    fun answer(message: JSONObject, expectedSeq: Int, videoIndex: Int): Answer {
         require(message.optString("type") == "ANSWER" && message.optInt("seqNum", -1) == expectedSeq) {
             "unexpected Cast Streaming answer"
         }
@@ -80,12 +116,13 @@ internal object CastStreamingProtocol {
         }
         val answer = message.getJSONObject("answer")
         val indexes = answer.getJSONArray("sendIndexes")
-        require((0 until indexes.length()).any { indexes.optInt(it, -1) == 0 }) {
+        require((0 until indexes.length()).any { indexes.optInt(it, -1) == videoIndex }) {
             "receiver did not accept H.264 video"
         }
         val port = answer.getInt("udpPort")
         require(port in 1..65535) { "invalid receiver UDP port" }
-        return port
+        return Answer(port, videoIndex == 1 &&
+            (0 until indexes.length()).any { indexes.optInt(it, -1) == 0 })
     }
 
     fun annexB(nals: List<ByteArray>, sps: ByteArray?, pps: ByteArray?, keyFrame: Boolean): ByteArray {
@@ -102,18 +139,28 @@ internal object CastStreamingProtocol {
         return output.toByteArray()
     }
 
-    class Packetizer(private val stream: VideoStream, sequenceStart: Int = SecureRandom().nextInt()) {
+    class Packetizer(
+        private val ssrc: Int,
+        private val key: ByteArray,
+        private val ivMask: ByteArray,
+        private val payloadType: Int,
+        sequenceStart: Int = SecureRandom().nextInt(),
+    ) {
+        constructor(stream: VideoStream, sequenceStart: Int = SecureRandom().nextInt()) :
+            this(stream.ssrc, stream.key, stream.ivMask, VIDEO_PAYLOAD_TYPE, sequenceStart)
+        constructor(stream: AudioStream, sequenceStart: Int = SecureRandom().nextInt()) :
+            this(stream.ssrc, stream.key, stream.ivMask, AUDIO_PAYLOAD_TYPE, sequenceStart)
         private var sequence = sequenceStart and 0xffff
 
         fun packetize(frameId: Long, rtpTimestamp: Int, keyFrame: Boolean, data: ByteArray): List<ByteArray> {
             require(data.isNotEmpty())
             val count = (data.size + MAX_PAYLOAD_BYTES - 1) / MAX_PAYLOAD_BYTES
             require(count <= 65536) { "encoded frame exceeds Cast RTP packet limit" }
-            val iv = stream.ivMask.clone()
+            val iv = ivMask.clone()
             val id = frameId.toInt()
             for (i in 0..3) iv[8 + i] = (iv[8 + i].toInt() xor (id ushr (24 - i * 8))).toByte()
             val cipher = Cipher.getInstance("AES/CTR/NoPadding")
-            cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(stream.key, "AES"), IvParameterSpec(iv))
+            cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
             val encrypted = cipher.doFinal(data)
             return List(count) { packetId ->
                 val first = packetId == 0
@@ -124,10 +171,10 @@ internal object CastStreamingProtocol {
                 ByteBuffer.allocate(19 + if (extension) 4 + end - start else end - start)
                     .order(ByteOrder.BIG_ENDIAN)
                     .put(0x80.toByte())
-                    .put(((if (last) 0x80 else 0) or VIDEO_PAYLOAD_TYPE).toByte())
+                    .put(((if (last) 0x80 else 0) or payloadType).toByte())
                     .putShort(sequence++.toShort())
                     .putInt(rtpTimestamp)
-                    .putInt(stream.ssrc)
+                    .putInt(ssrc)
                     .put(((if (keyFrame) 0x80 else 0) or 0x40 or if (extension) 1 else 0).toByte())
                     .put(frameId.toByte())
                     .putShort(packetId.toShort())
@@ -151,7 +198,15 @@ internal object CastStreamingProtocol {
             .putInt(ssrc).putLong(ntp).putInt(rtp).putInt(packets).putInt(octets).array()
 
     fun ntpNow(): Long {
-        val ms = System.currentTimeMillis()
+        return ntpAtMs(System.currentTimeMillis())
+    }
+
+    fun ntpForPts(ptsUs: Long): Long {
+        val capturedAgoUs = System.nanoTime() / 1000 - ptsUs
+        return ntpAtMs(System.currentTimeMillis() - capturedAgoUs / 1000)
+    }
+
+    private fun ntpAtMs(ms: Long): Long {
         return ((ms / 1000 + 2_208_988_800L) shl 32) or
             (((ms % 1000) shl 32) / 1000)
     }

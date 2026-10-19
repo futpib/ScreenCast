@@ -49,3 +49,6 @@
 -dontwarn com.google.errorprone.annotations.**
 -dontwarn javax.annotation.**
 -dontwarn javax.annotation.concurrent.**
+
+# The Cast Opus encoder calls these JNI functions by their Java symbol names.
+-keep class io.github.ddagunts.screencast.nativecast.NativeOpusEncoder { *; }

@@ -18,6 +18,13 @@ class CastStreamingProtocolTest {
         0x12345678, ByteArray(16) { it.toByte() }, ByteArray(16) { (it + 20).toByte() },
         1280, 720, 30, 3_000_000)
 
+    @Test fun generatedSsrcFitsReceiverSignedIntegerParser() {
+        repeat(100) {
+            assertTrue(CastStreamingProtocol.VideoStream.random(1280, 720, 30, 3_000_000).ssrc > 0)
+            assertTrue(CastStreamingProtocol.AudioStream.random().ssrc > 0)
+        }
+    }
+
     @Test fun offerAndAnswerSelectH264AndUdpPort() {
         val offer = CastStreamingProtocol.offer(7, stream)
         val video = offer.getJSONObject("offer").getJSONArray("supportedStreams").getJSONObject(0)
@@ -28,10 +35,51 @@ class CastStreamingProtocolTest {
         assertEquals(32, video.getString("aesKey").length)
         val answer = JSONObject("""{"type":"ANSWER","seqNum":7,"result":"ok",
             "answer":{"udpPort":2345,"sendIndexes":[0]}}""")
-        assertEquals(2345, CastStreamingProtocol.answerPort(answer, 7))
+        assertEquals(CastStreamingProtocol.Answer(2345, false),
+            CastStreamingProtocol.answer(answer, 7, 0))
         assertThrows(IllegalArgumentException::class.java) {
-            CastStreamingProtocol.answerPort(answer, 8)
+            CastStreamingProtocol.answer(answer, 8, 0)
         }
+    }
+
+    @Test fun offerAndAnswerSelectOpusAndVideoSeparately() {
+        val audio = CastStreamingProtocol.AudioStream(
+            0x55667788, ByteArray(16) { 1 }, ByteArray(16) { 2 })
+        val streams = CastStreamingProtocol.offer(4, stream, audio)
+            .getJSONObject("offer").getJSONArray("supportedStreams")
+        val offeredAudio = streams.getJSONObject(0)
+        val offeredVideo = streams.getJSONObject(1)
+        assertEquals("opus", offeredAudio.getString("codecName"))
+        assertEquals("1/48000", offeredAudio.getString("timeBase"))
+        assertEquals(127, offeredAudio.getInt("rtpPayloadType"))
+        assertEquals(2, offeredAudio.getInt("channels"))
+        assertEquals(1, offeredVideo.getInt("index"))
+        val both = JSONObject("""{"type":"ANSWER","seqNum":4,"result":"ok",
+            "answer":{"udpPort":2345,"sendIndexes":[0,1]}}""")
+        assertEquals(CastStreamingProtocol.Answer(2345, true),
+            CastStreamingProtocol.answer(both, 4, 1))
+        val videoOnly = JSONObject("""{"type":"ANSWER","seqNum":4,"result":"ok",
+            "answer":{"udpPort":2345,"sendIndexes":[1]}}""")
+        assertEquals(CastStreamingProtocol.Answer(2345, false),
+            CastStreamingProtocol.answer(videoOnly, 4, 1))
+        assertThrows(IllegalArgumentException::class.java) {
+            CastStreamingProtocol.answer(JSONObject("""{"type":"ANSWER","seqNum":4,"result":"ok",
+                "answer":{"udpPort":2345,"sendIndexes":[0]}}"""), 4, 1)
+        }
+    }
+
+    @Test fun opusFrameUsesAudioPayloadAndIndependentEncryption() {
+        val audio = CastStreamingProtocol.AudioStream(
+            0x55667788, ByteArray(16) { (it + 1).toByte() }, ByteArray(16))
+        val opus = byteArrayOf(0x78, 1, 2, 3, 4)
+        val packet = CastStreamingProtocol.Packetizer(audio, 10)
+            .packetize(0, 48_000, true, opus).single()
+        assertEquals(127, packet[1].toInt() and 0x7f)
+        assertEquals(audio.ssrc, readInt(packet, 8))
+        assertEquals(48_000, readInt(packet, 4))
+        val cipher = Cipher.getInstance("AES/CTR/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(audio.key, "AES"), IvParameterSpec(audio.ivMask))
+        assertArrayEquals(opus, cipher.doFinal(packet.copyOfRange(23, packet.size)))
     }
 
     @Test fun encryptedRtpFrameRoundTripsAcrossPackets() {

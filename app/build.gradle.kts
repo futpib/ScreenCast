@@ -28,6 +28,7 @@ val releaseSigningReady =
 android {
     namespace = "io.github.ddagunts.screencast"
     compileSdk = 36
+    ndkVersion = "28.2.13676358"
 
     defaultConfig {
         applicationId = "io.github.ddagunts.screencast"
@@ -73,6 +74,13 @@ android {
 
     buildFeatures {
         compose = true
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     packaging {
