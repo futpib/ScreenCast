@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -55,6 +57,7 @@ class MainActivity : ComponentActivity() {
     private val webRtcVm: WebRtcViewModel by viewModels()
     private val atvVm: AndroidTvViewModel by viewModels()
     private val nativeVm: NativeCastViewModel by viewModels()
+    private val mediaVm: MediaPushViewModel by viewModels()
 
     private val permissionRequest = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -65,7 +68,7 @@ class MainActivity : ComponentActivity() {
         requestPermissionsIfNeeded()
         setContent {
             ScreenCastTheme {
-                Surface(Modifier.fillMaxSize()) { AppScaffold(vm, webRtcVm, atvVm, nativeVm) }
+                Surface(Modifier.fillMaxSize()) { AppScaffold(vm, webRtcVm, atvVm, nativeVm, mediaVm) }
             }
         }
     }
@@ -113,6 +116,7 @@ private fun AppScaffold(
     webRtcVm: WebRtcViewModel,
     atvVm: AndroidTvViewModel,
     nativeVm: NativeCastViewModel,
+    mediaVm: MediaPushViewModel,
 ) {
     var screen by rememberSaveable { mutableStateOf(Screen.Cast) }
     val castMode by vm.castMode.collectAsStateWithLifecycle()
@@ -149,6 +153,7 @@ private fun AppScaffold(
                     webRtcVm = webRtcVm,
                     atvVm = atvVm,
                     nativeVm = nativeVm,
+                    mediaVm = mediaVm,
                 )
                 Screen.Settings -> SettingsScreen(vm, webRtcVm)
                 Screen.Logs -> LogPanelScreen()
@@ -158,7 +163,7 @@ private fun AppScaffold(
 }
 
 // Single unified main screen. Mode toggle at the top, the selected mode's
-// device picker + active-session UI below. All three VMs stay alive so
+// device picker + active-session UI below. The VMs stay alive so
 // switching modes is instant and doesn't drop in-flight discovery — the
 // ATV discovery in particular benefits, since the TVs sometimes take a
 // few seconds to respond to the first mDNS query after boot.
@@ -171,11 +176,12 @@ private fun CastScreenRoot(
     webRtcVm: WebRtcViewModel,
     atvVm: AndroidTvViewModel,
     nativeVm: NativeCastViewModel,
+    mediaVm: MediaPushViewModel,
 ) {
     Column(Modifier.fillMaxSize()) {
         SingleChoiceSegmentedButtonRow(
             modifier = Modifier
-                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
             val modes = CastMode.values()
@@ -190,6 +196,7 @@ private fun CastScreenRoot(
                         CastMode.WEBRTC -> "WebRTC"
                         CastMode.REMOTE -> "Remote"
                         CastMode.NATIVE -> "Native"
+                        CastMode.MEDIA -> "Media"
                     })
                 }
             }
@@ -199,6 +206,7 @@ private fun CastScreenRoot(
             CastMode.WEBRTC -> WebRtcCastBody(webRtcVm)
             CastMode.REMOTE -> AndroidTvRemoteScreen(atvVm)
             CastMode.NATIVE -> NativeCastBody(nativeVm, webRtcVm)
+            CastMode.MEDIA -> MediaPushScreen(mediaVm, vm)
         }
     }
 }

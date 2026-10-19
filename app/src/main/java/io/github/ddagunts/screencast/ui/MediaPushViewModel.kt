@@ -1,0 +1,94 @@
+package io.github.ddagunts.screencast.ui
+
+import android.app.Application
+import android.content.Intent
+import android.net.Uri
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import io.github.ddagunts.screencast.MediaPushService
+import io.github.ddagunts.screencast.cast.CastDevice
+import io.github.ddagunts.screencast.mediapush.DlnaDevice
+import io.github.ddagunts.screencast.mediapush.DlnaDiscovery
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+
+class MediaPushViewModel(app: Application) : AndroidViewModel(app) {
+    private val discovery = DlnaDiscovery(app)
+    private val _devices = MutableStateFlow<List<DlnaDevice>>(emptyList())
+    val devices: StateFlow<List<DlnaDevice>> = _devices
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error
+    val session = MediaPushService.sessionFlow
+    val serviceError = MediaPushService.errorFlow
+
+    init { scan() }
+
+    fun scan() {
+        viewModelScope.launch {
+            runCatching { discovery.scan() }
+                .onSuccess { found ->
+                    _devices.value = (found + _devices.value).distinctBy { it.controlUrl }
+                    _error.value = null
+                }
+                .onFailure { _error.value = it.message ?: "DLNA discovery failed" }
+        }
+    }
+
+    fun addDescription(url: String) {
+        viewModelScope.launch {
+            runCatching { discovery.resolve(url.trim()) ?: error("No AVTransport service found") }
+                .onSuccess { device ->
+                    _devices.value = (_devices.value + device).distinctBy { it.controlUrl }
+                    _error.value = null
+                }
+                .onFailure { _error.value = it.message ?: "Cannot read DLNA description" }
+        }
+    }
+
+    fun startCast(device: CastDevice, source: String, local: Boolean, mime: String) {
+        start(Intent(getApplication(), MediaPushService::class.java)
+            .putExtra(MediaPushService.EXTRA_PROTOCOL, MediaPushService.PROTOCOL_CAST)
+            .putExtra(MediaPushService.EXTRA_TARGET_NAME, device.name)
+            .putExtra(MediaPushService.EXTRA_HOST, device.host)
+            .putExtra(MediaPushService.EXTRA_PORT, device.port), source, local, mime)
+    }
+
+    fun startDlna(device: DlnaDevice, source: String, local: Boolean, mime: String) {
+        start(Intent(getApplication(), MediaPushService::class.java)
+            .putExtra(MediaPushService.EXTRA_PROTOCOL, MediaPushService.PROTOCOL_DLNA)
+            .putExtra(MediaPushService.EXTRA_TARGET_NAME, device.name)
+            .putExtra(MediaPushService.EXTRA_HOST, device.host)
+            .putExtra(MediaPushService.EXTRA_CONTROL_URL, device.controlUrl)
+            .putExtra(MediaPushService.EXTRA_SERVICE_TYPE, device.serviceType), source, local, mime)
+    }
+
+    private fun start(intent: Intent, source: String, local: Boolean, mime: String) {
+        if (session.value != null) return
+        if (source.isBlank()) {
+            _error.value = "Choose a file or enter a direct media URL"
+            return
+        }
+        if (!local && runCatching { Uri.parse(source).scheme in listOf("http", "https") }
+                .getOrDefault(false).not()) {
+            _error.value = "Use a direct HTTP or HTTPS media URL"
+            return
+        }
+        _error.value = null
+        ContextCompat.startForegroundService(getApplication(), intent
+            .setAction(MediaPushService.ACTION_START)
+            .putExtra(MediaPushService.EXTRA_SOURCE, source)
+            .putExtra(MediaPushService.EXTRA_LOCAL, local)
+            .putExtra(MediaPushService.EXTRA_MIME, mime))
+    }
+
+    fun stop() = action(MediaPushService.ACTION_STOP)
+    fun pause() = action(MediaPushService.ACTION_PAUSE)
+    fun play() = action(MediaPushService.ACTION_PLAY)
+
+    private fun action(value: String) {
+        val app = getApplication<Application>()
+        app.startService(Intent(app, MediaPushService::class.java).setAction(value))
+    }
+}

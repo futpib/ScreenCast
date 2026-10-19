@@ -66,6 +66,16 @@ class CastMessagesTest {
         assertTrue(JSONObject(m.payloadUtf8).getBoolean("autoplay"))
     }
 
+    @Test fun `mediaLoadMsg describes buffered video and still images`() {
+        val video = JSONObject(mediaLoadMsg("t", "s", "http://tv/video.mp4", "video/mp4",
+            streamType = "BUFFERED", title = "Holiday").first.payloadUtf8).getJSONObject("media")
+        assertEquals("BUFFERED", video.getString("streamType"))
+        assertEquals("Holiday", video.getJSONObject("metadata").getString("title"))
+        val image = JSONObject(mediaLoadMsg("t", "s", "http://tv/photo.jpg", "image/jpeg",
+            streamType = "NONE").first.payloadUtf8).getJSONObject("media")
+        assertEquals(4, image.getJSONObject("metadata").getInt("metadataType"))
+    }
+
     @Test fun `mediaSeekMsg defaults to PLAYBACK_PAUSE for startup align`() {
         val (m, _) = mediaSeekMsg("t", 7, 12.345)
         val p = JSONObject(m.payloadUtf8)

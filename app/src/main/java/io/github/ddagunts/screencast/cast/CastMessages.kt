@@ -51,15 +51,18 @@ fun mediaLoadMsg(
     mediaUrl: String,
     contentType: String,
     autoplay: Boolean = true,
+    streamType: String = "LIVE",
+    title: String = "ScreenCast",
 ): Pair<CastMessage, Int> {
+    require(streamType in setOf("LIVE", "BUFFERED", "NONE"))
     val reqId = nextRequestId()
     val metadata = JSONObject()
-        .put("metadataType", 0)
-        .put("title", "ScreenCast")
+        .put("metadataType", if (contentType.startsWith("image/")) 4 else 0)
+        .put("title", title)
     val media = JSONObject()
         .put("contentId", mediaUrl)
         .put("contentType", contentType)
-        .put("streamType", "LIVE")
+        .put("streamType", streamType)
         .put("metadata", metadata)
     val payload = JSONObject()
         .put("type", "LOAD")

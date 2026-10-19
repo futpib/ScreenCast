@@ -40,9 +40,30 @@ device and network. Audio and video were tested against a stock MiTV-MOEU0 recei
 The bundled [Opus 1.5.2 source](app/src/main/cpp/opus) is licensed under its
 [BSD license](app/src/main/cpp/opus/COPYING).
 
+## Media playback on a TV
+
+Choose **Media** to play a photo, video, or audio file on one TV. Select a file
+with Android's document picker or enter a direct HTTP(S) media URL, then tap a
+Google Cast or DLNA receiver. A web page URL will not work; the receiver must
+be able to fetch and decode the media itself. This mode does not mirror the
+phone screen or transcode files.
+
+- **Google Cast:** uses the stock Default Media Receiver and sends a buffered
+  media `LOAD` over Cast V2. Cast targets are discovered by mDNS, or can be
+  entered by IP address. Playback status follows receiver media messages.
+- **DLNA / UPnP:** discovers MediaRenderer devices with SSDP and controls their
+  AVTransport service with `SetAVTransportURI`, `Play`, `Pause`, and `Stop`.
+  If discovery misses a renderer, enter its device description URL. A
+  successful control response only confirms that playback was requested; the
+  receiver may still reject the file format.
+- **Files on the phone:** the app temporarily serves the chosen document from
+  the phone's Wi-Fi address through a random URL, including HTTP byte ranges.
+  The file is available while the media foreground service is active. Both
+  devices must be able to reach each other on the local network.
+
 ## WebRTC mode (low-latency) — optional
 
-The default cast path is HLS over HTTP; latency is ~5–10 s. A separate **WebRTC** mode ships alongside it for sub-second latency. It's reachable from the overflow menu on the Cast screen.
+The default cast path is HLS over HTTP; latency is ~5–10 s. A separate **WebRTC** mode ships alongside it for sub-second latency. Choose it from the mode row on the main screen.
 
 WebRTC mode uses a **custom Cast receiver**. The app ships with a default App ID (`9098830C`) pointing at the project's hosted receiver, so it works out of the box. If you'd rather host your own receiver, register its URL at <https://cast.google.com/publish/> and paste the resulting 8-character App ID into Settings. Static receiver page + instructions live in [`receiver/`](receiver/). When you start a cast the app launches the receiver, negotiates a `RTCPeerConnection` over the Cast channel, and streams the screen directly. No HLS server, no drift/sync coordination, no multi-device fan-out.
 
@@ -65,7 +86,8 @@ Switch the segmented control at the top to **Remote** to use the app as a remote
 ## Requirements
 
 - Android 8.0+ (API 26).
-- A Chromecast on the same Wi-Fi network.
+- A Chromecast, DLNA MediaRenderer, or Android TV on the same local network,
+  depending on the mode.
 
 ## Build
 
@@ -78,7 +100,7 @@ export JAVA_HOME=/path/to/jdk-21
 
 Output: `app/build/outputs/apk/debug/app-debug.apk`.
 
-Pinned to Gradle 9.4.1; tested against Android Studio's bundled JBR 21.
+Pinned to Gradle 9.6.0; tested against Android Studio's bundled JBR 21.
 
 Debug builds install side-by-side with release (`applicationId` suffix `.debug`).
 
@@ -103,6 +125,7 @@ Then `./gradlew assembleRelease`. Without credentials `assembleRelease` still ru
 app/src/main/java/io/github/ddagunts/screencast/
 ├── cast/      # Cast V2 protocol (discovery, TLS channel, session FSM)
 ├── media/     # HLS mode: screen capture, H.264 encode, HLS muxer, Ktor server
+├── mediapush/ # Direct Cast media and DLNA playback, local document server
 ├── webrtc/    # WebRTC mode: PeerConnection, signaling over custom Cast namespace
 ├── nativecast/ # Cast Streaming: OFFER/ANSWER, encrypted RTP, RTCP feedback
 ├── androidtv/ # Remote mode: polo pairing + ATV Remote v2 control channel

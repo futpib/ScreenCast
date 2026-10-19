@@ -9,6 +9,7 @@ import android.content.Context
 //   * NATIVE — stock Cast Streaming receiver + encrypted RTP over UDP.
 //   * WEBRTC — custom receiver + RTCPeerConnection. Same target device,
 //     low-latency path.
+//   * MEDIA — direct file/URL playback through Cast or DLNA.
 //   * REMOTE — Android TV / Google TV remote control over the polo
 //     pairing + remote-v2 protocols. Different target devices than HLS
 //     and WEBRTC, but the user picks "what am I trying to do" via this
@@ -18,6 +19,7 @@ enum class CastMode {
     HLS,
     NATIVE,
     WEBRTC,
+    MEDIA,
     REMOTE;
 
     companion object {

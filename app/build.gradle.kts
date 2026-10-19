@@ -95,6 +95,12 @@ android {
             isIncludeAndroidResources = true
         }
     }
+
+    lint {
+        // AGP 9.2.1 lint crashes in UnsafeIntentLaunchDetector while analyzing
+        // the media foreground service (Kotlin FIR has no declaration).
+        disable += "UnsafeIntentLaunch"
+    }
 }
 
 kotlin {

@@ -70,7 +70,14 @@ class CastSession(val device: CastDevice) {
     // gone, so we can't rely on send() to throw.
     @Volatile private var lastHeartbeatMs: Long = 0L
 
-    suspend fun startCast(appId: String, mediaUrl: String, contentType: String, autoplay: Boolean = true) {
+    suspend fun startCast(
+        appId: String,
+        mediaUrl: String,
+        contentType: String,
+        autoplay: Boolean = true,
+        streamType: String = "LIVE",
+        title: String = "ScreenCast",
+    ) {
         _state.value = CastState.Connecting(device)
         val s = CoroutineScope(Dispatchers.IO)
         scope = s
@@ -106,22 +113,27 @@ class CastSession(val device: CastDevice) {
         }
 
         channel.send(CastMessage(SENDER_ID, tid, CastNs.CONNECTION, """{"type":"CONNECT"}"""))
-        val (load, loadReqId) = mediaLoadMsg(tid, sid, mediaUrl, contentType, autoplay)
+        val (load, loadReqId) = mediaLoadMsg(tid, sid, mediaUrl, contentType,
+            autoplay, streamType, title)
         channel.send(load)
         logI("LOAD sent (requestId=$loadReqId, url=$mediaUrl, autoplay=$autoplay)")
         _state.value = CastState.Casting(device)
     }
 
     fun stop() {
+        scope?.launch {
+            stopAndClose()
+        }
+    }
+
+    suspend fun stopAndClose() {
         val tid = transportId
         val mid = mediaSessionId
-        scope?.launch {
-            runCatching {
-                if (tid != null && mid != null) channel.send(mediaStopMsg(tid, mid).first)
-                channel.send(closeMsg())
-            }
-            close()
+        runCatching {
+            if (tid != null && mid != null) channel.send(mediaStopMsg(tid, mid).first)
+            channel.send(closeMsg())
         }
+        close()
     }
 
     // Pause/play are no-ops until LAUNCH completes and the receiver has sent

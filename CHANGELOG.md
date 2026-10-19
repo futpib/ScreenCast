@@ -4,6 +4,13 @@ All notable changes to ScreenCast are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project
 uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+- Media mode for direct file or URL playback through the stock Cast receiver
+  or a DLNA MediaRenderer. Local files are served from the phone with HTTP
+  range support while the foreground playback service is active.
+
 ## [0.14.1]
 
 ### Changed
