@@ -6,6 +6,7 @@ import android.content.Context
 // top with one device list visible at a time, governed by this enum:
 //   * HLS — Ktor stream server + the Default Media Receiver. Casts the
 //     phone screen to a Chromecast.
+//   * NATIVE — stock Cast Streaming receiver + encrypted RTP over UDP.
 //   * WEBRTC — custom receiver + RTCPeerConnection. Same target device,
 //     low-latency path.
 //   * REMOTE — Android TV / Google TV remote control over the polo
@@ -15,6 +16,7 @@ import android.content.Context
 // Persisted so the app opens in whichever mode was last used.
 enum class CastMode {
     HLS,
+    NATIVE,
     WEBRTC,
     REMOTE;
 

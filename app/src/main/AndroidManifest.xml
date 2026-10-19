@@ -54,6 +54,13 @@
             android:taskAffinity=""
             android:exported="false" />
 
+        <activity
+            android:name=".NativeProjectionRequestActivity"
+            android:theme="@style/Theme.Transparent"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:exported="false" />
+
         <service
             android:name=".CastForegroundService"
             android:foregroundServiceType="mediaProjection"
@@ -61,6 +68,11 @@
 
         <service
             android:name=".WebRtcForegroundService"
+            android:foregroundServiceType="mediaProjection"
+            android:exported="false" />
+
+        <service
+            android:name=".NativeCastForegroundService"
             android:foregroundServiceType="mediaProjection"
             android:exported="false" />
     </application>

@@ -22,11 +22,23 @@ An open-source Android app that casts the phone's screen to one or more Chromeca
 - **Sync across receivers**: HLS LIVE doesn't give receivers a shared clock, so by default each one picks its own live-edge and they drift. With **Sync start** enabled (Settings), the app coordinates a pause → seek → play handshake whenever a new device joins so every receiver lands on the same stream offset. A background loop then re-aligns every ~15 s: it polls `currentTime` on every session, pauses them all, seeks to the laggard's offset, and plays them back in parallel. This is best-effort — receiver-local offsets are only comparable while sessions stay connected.
 
 
+## Native Cast mirroring
+
+Choose **Native** on the main screen to mirror video to a stock Cast receiver.
+This mode launches the stock Android mirroring receiver (`674A0243`, with the
+default Cast Streaming receiver `0F5096E8` as a fallback), negotiates a
+Cast Streaming `OFFER`/`ANSWER`, and sends H.264 frames as encrypted Cast RTP
+over UDP. RTCP sender reports, acknowledgements, retransmissions, and keyframe
+requests are handled in the app. It uses neither the HLS playlist nor the
+custom WebRTC receiver. It casts to one device at a time and currently carries
+video only. The receiver's target playout delay is 200 ms; actual latency
+depends on the device and network and has not been measured on a physical TV.
+
 ## WebRTC mode (low-latency) — optional
 
 The default cast path is HLS over HTTP; latency is ~5–10 s. A separate **WebRTC** mode ships alongside it for sub-second latency. It's reachable from the overflow menu on the Cast screen.
 
-WebRTC mode uses a **custom Cast receiver**. The app ships with a default App ID (`9098830C`) pointing at the project's hosted receiver, so it works out of the box. If you'd rather host your own receiver, register its URL at <https://cast.google.com/publish/> and paste the resulting 8-character App ID into the app's WebRTC screen. Static receiver page + instructions live in [`receiver/`](receiver/). When you start a cast the app launches the receiver, negotiates a `RTCPeerConnection` over the Cast channel, and streams the screen directly. No HLS server, no drift/sync coordination, no multi-device fan-out.
+WebRTC mode uses a **custom Cast receiver**. The app ships with a default App ID (`9098830C`) pointing at the project's hosted receiver, so it works out of the box. If you'd rather host your own receiver, register its URL at <https://cast.google.com/publish/> and paste the resulting 8-character App ID into Settings. Static receiver page + instructions live in [`receiver/`](receiver/). When you start a cast the app launches the receiver, negotiates a `RTCPeerConnection` over the Cast channel, and streams the screen directly. No HLS server, no drift/sync coordination, no multi-device fan-out.
 
 Tradeoffs versus HLS mode:
 
@@ -86,6 +98,7 @@ app/src/main/java/io/github/ddagunts/screencast/
 ├── cast/      # Cast V2 protocol (discovery, TLS channel, session FSM)
 ├── media/     # HLS mode: screen capture, H.264 encode, HLS muxer, Ktor server
 ├── webrtc/    # WebRTC mode: PeerConnection, signaling over custom Cast namespace
+├── nativecast/ # Cast Streaming: OFFER/ANSWER, encrypted RTP, RTCP feedback
 ├── androidtv/ # Remote mode: polo pairing + ATV Remote v2 control channel
 ├── ui/        # Jetpack Compose UI + ViewModels (one per mode)
 └── util/      # Networking, logging
@@ -95,4 +108,6 @@ receiver/             # WebRTC custom Cast receiver (static HTML/JS)
 
 ## License
 
-Apache-2.0.
+Apache-2.0. The native Cast Streaming protocol code includes BSD-3-Clause
+material; its notice is in [`nativecast/NOTICE`](app/src/main/java/io/github/ddagunts/screencast/nativecast/NOTICE)
+and is bundled in the APK.

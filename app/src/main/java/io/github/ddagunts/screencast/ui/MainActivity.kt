@@ -54,6 +54,7 @@ class MainActivity : ComponentActivity() {
     private val vm: CastViewModel by viewModels()
     private val webRtcVm: WebRtcViewModel by viewModels()
     private val atvVm: AndroidTvViewModel by viewModels()
+    private val nativeVm: NativeCastViewModel by viewModels()
 
     private val permissionRequest = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -64,7 +65,7 @@ class MainActivity : ComponentActivity() {
         requestPermissionsIfNeeded()
         setContent {
             ScreenCastTheme {
-                Surface(Modifier.fillMaxSize()) { AppScaffold(vm, webRtcVm, atvVm) }
+                Surface(Modifier.fillMaxSize()) { AppScaffold(vm, webRtcVm, atvVm, nativeVm) }
             }
         }
     }
@@ -111,6 +112,7 @@ private fun AppScaffold(
     vm: CastViewModel,
     webRtcVm: WebRtcViewModel,
     atvVm: AndroidTvViewModel,
+    nativeVm: NativeCastViewModel,
 ) {
     var screen by rememberSaveable { mutableStateOf(Screen.Cast) }
     val castMode by vm.castMode.collectAsStateWithLifecycle()
@@ -146,6 +148,7 @@ private fun AppScaffold(
                     vm = vm,
                     webRtcVm = webRtcVm,
                     atvVm = atvVm,
+                    nativeVm = nativeVm,
                 )
                 Screen.Settings -> SettingsScreen(vm, webRtcVm)
                 Screen.Logs -> LogPanelScreen()
@@ -167,6 +170,7 @@ private fun CastScreenRoot(
     vm: CastViewModel,
     webRtcVm: WebRtcViewModel,
     atvVm: AndroidTvViewModel,
+    nativeVm: NativeCastViewModel,
 ) {
     Column(Modifier.fillMaxSize()) {
         SingleChoiceSegmentedButtonRow(
@@ -185,6 +189,7 @@ private fun CastScreenRoot(
                         CastMode.HLS -> "HLS"
                         CastMode.WEBRTC -> "WebRTC"
                         CastMode.REMOTE -> "Remote"
+                        CastMode.NATIVE -> "Native"
                     })
                 }
             }
@@ -193,6 +198,7 @@ private fun CastScreenRoot(
             CastMode.HLS -> CastControlScreen(vm)
             CastMode.WEBRTC -> WebRtcCastBody(webRtcVm)
             CastMode.REMOTE -> AndroidTvRemoteScreen(atvVm)
+            CastMode.NATIVE -> NativeCastBody(nativeVm, webRtcVm)
         }
     }
 }

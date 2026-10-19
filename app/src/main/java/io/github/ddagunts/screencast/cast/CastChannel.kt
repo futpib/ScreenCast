@@ -15,6 +15,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.DataInputStream
 import java.io.DataOutputStream
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
@@ -36,8 +38,27 @@ class CastChannel(
 
     fun connect(onClose: (Throwable?) -> Unit): Job {
         val factory = trustAllFactory()
-        val s = factory.createSocket(host, port) as SSLSocket
-        s.startHandshake()
+        val tcp = Socket()
+        try {
+            tcp.connect(InetSocketAddress(host, port), 4_000)
+        } catch (e: Throwable) {
+            tcp.close()
+            throw e
+        }
+        val s = try {
+            factory.createSocket(tcp, host, port, true) as SSLSocket
+        } catch (e: Throwable) {
+            tcp.close()
+            throw e
+        }
+        try {
+            s.soTimeout = 5_000
+            s.startHandshake()
+            s.soTimeout = 0
+        } catch (e: Throwable) {
+            s.close()
+            throw e
+        }
         socket = s
         out = DataOutputStream(s.outputStream)
         val scope = CoroutineScope(Dispatchers.IO)
@@ -70,7 +91,10 @@ class CastChannel(
             o.write(data)
             o.flush()
         }
-        logD(">> ${msg.namespace} ${msg.payloadUtf8.take(500)}")
+        val shown = if (msg.namespace == "urn:x-cast:com.google.cast.webrtc" &&
+            msg.payloadUtf8.contains("\"aesKey\"")) "OFFER (key material omitted)"
+        else msg.payloadUtf8.take(500)
+        logD(">> ${msg.namespace} $shown")
     }
 
     fun close() {

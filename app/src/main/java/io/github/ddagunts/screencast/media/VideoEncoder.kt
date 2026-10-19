@@ -66,6 +66,13 @@ class VideoEncoder(
         runCatching { inputSurface.release() }
     }
 
+    fun requestKeyFrame() {
+        if (!running) return
+        runCatching {
+            codec.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) })
+        }
+    }
+
     // KEY_I_FRAME_INTERVAL is a *hint* and vendor encoders miss it by up to a
     // second either way. HlsSegmenter only flushes at IDR boundaries, so we force
     // a sync frame on a fixed wall-clock cadence to keep segment durations —
