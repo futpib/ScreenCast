@@ -42,6 +42,8 @@ internal class NativeCastSession(private val context: Context, val device: CastD
                                  private val audioOnly: Boolean = false,
                                  private val projectionLease: MirrorProjectionService.Lease? = null) {
     private data class App(val sessionId: String, val transportId: String)
+    private data class VideoOffer(val profile: CastVideoQuality.Profile,
+                                  val stream: CastStreamingProtocol.VideoStream)
 
     private val scope = CoroutineScope(Dispatchers.IO + Job())
     private val channel = CastChannel(context, device.host, device.port)
@@ -97,12 +99,23 @@ internal class NativeCastSession(private val context: Context, val device: CastD
             audioEncoder = OpusPlaybackEncoder.prepare(context, mp)
             if (audioOnly && audioEncoder == null) error("playback audio capture is unavailable")
             val offeredAudio = audioEncoder != null
-            val offeredProfiles = if (audioOnly) emptyList() else CastVideoQuality.profiles.filter {
-                VideoEncoder.avcEncoderFor(it.width, it.height, it.fps) != null
-            }.also { require(it.isNotEmpty()) { "phone has no supported H.264 encoder" } }
-            val offeredVideos = offeredProfiles.map {
-                CastStreamingProtocol.VideoStream.random(it.width, it.height, it.fps, it.bitrate)
+            val availableOffers = if (audioOnly) emptyList() else CastVideoQuality.profiles.flatMap { profile ->
+                CastStreamingProtocol.VideoCodec.entries.mapNotNull { codec ->
+                    if (VideoEncoder.encoderFor(codec.mimeType, profile.width, profile.height,
+                            profile.fps) == null) null
+                    else VideoOffer(profile, CastStreamingProtocol.VideoStream.random(
+                        profile.width, profile.height, profile.fps, profile.bitrate, codec))
+                }
+            }.also { require(it.isNotEmpty()) { "phone has no supported Cast video encoder" } }
+            val videoOffers = availableOffers.map { offer ->
+                val resolutions = availableOffers.filter { candidate ->
+                    candidate.stream.codec == offer.stream.codec &&
+                        candidate.profile.width <= offer.profile.width &&
+                        candidate.profile.height <= offer.profile.height
+                }.map { it.profile.width to it.profile.height }.distinct()
+                offer.copy(stream = offer.stream.copy(resolutions = resolutions))
             }
+            val offeredVideos = videoOffers.map { it.stream }
             val offer = if (audioOnly) CastStreamingProtocol.audioOnlyOffer(1, audioStream)
                 else CastStreamingProtocol.offer(1, offeredVideos,
                     if (offeredAudio) audioStream else null)
@@ -119,21 +132,24 @@ internal class NativeCastSession(private val context: Context, val device: CastD
             } else {
                 val offset = if (offeredAudio) 1 else 0
                 val accepted = CastStreamingProtocol.answer(answer, 1,
-                    offeredVideos.indices.map { it + offset }, if (offeredAudio) 0 else null)
+                    offeredVideos.indices.associate { (it + offset) to offeredVideos[it].codec },
+                    if (offeredAudio) 0 else null)
                 acceptedPort = accepted.port
                 audioAccepted = accepted.audioAccepted
-                val offerProfile = offeredProfiles[accepted.videoIndex - offset]
-                val offeredVideo = offeredVideos[accepted.videoIndex - offset]
+                val offerProfile = videoOffers[accepted.videoIndex - offset].profile
+                val offeredVideo = videoOffers[accepted.videoIndex - offset].stream
                 require((accepted.videoLimits?.minBitRate ?: 0) <= offeredVideo.bitRate) {
                     "receiver minimum bitrate exceeds the selected video offer"
                 }
                 val profiles = CastVideoQuality.candidates(accepted.videoLimits) { candidate ->
                     candidate.width <= offerProfile.width && candidate.height <= offerProfile.height &&
                         candidate.fps <= offerProfile.fps &&
-                        VideoEncoder.avcEncoderFor(candidate.width, candidate.height, candidate.fps) != null
+                        (candidate.width to candidate.height) in offeredVideo.resolutions.orEmpty() &&
+                        VideoEncoder.encoderFor(offeredVideo.codec.mimeType,
+                            candidate.width, candidate.height, candidate.fps) != null
                 }
                 val profile = profiles.firstOrNull()
-                    ?: error("receiver and phone have no compatible H.264 capture profile")
+                    ?: error("receiver and phone have no compatible ${offeredVideo.codec.wireName} capture profile")
                 activeProfile = profile
                 profileController = CastAdaptiveProfileController(profiles)
                 stream = offeredVideo.copy(width = profile.width, height = profile.height,
@@ -142,7 +158,8 @@ internal class NativeCastSession(private val context: Context, val device: CastD
                         accepted.videoLimits?.maxDelayMs ?: CastStreamingProtocol.TARGET_DELAY_MS),
                     minBitRate = accepted.videoLimits?.minBitRate ?: 300_000)
                 initialBitrate = CastVideoQuality.initialBitrate(stream!!, profile)
-                logI("Native Cast: negotiated ${profile.width}x${profile.height}@${profile.fps}, " +
+                logI("Native Cast: negotiated ${offeredVideo.codec.wireName} " +
+                    "${profile.width}x${profile.height}@${profile.fps}, " +
                     "bitrate ${stream!!.bitRate}, receiver limits ${accepted.videoLimits}")
             }
             if (!audioAccepted) {
@@ -253,9 +270,12 @@ internal class NativeCastSession(private val context: Context, val device: CastD
     }
 
     private fun createVideoEncoder(profile: CastVideoQuality.Profile, bitrate: Int): VideoEncoder {
+        val codec = stream?.codec ?: error("video codec was not selected")
         val video = VideoEncoder(profile.width, profile.height, profile.fps, bitrate,
             keyframeIntervalSec = 1,
-            codecName = VideoEncoder.avcEncoderFor(profile.width, profile.height, profile.fps))
+            codecName = VideoEncoder.encoderFor(codec.mimeType, profile.width, profile.height,
+                profile.fps) ?: error("${codec.wireName} encoder is unavailable"),
+            mimeType = codec.mimeType)
         var codecSps: ByteArray? = null
         var codecPps: ByteArray? = null
         video.start(object : VideoEncoder.Sink {
@@ -263,7 +283,8 @@ internal class NativeCastSession(private val context: Context, val device: CastD
                 codecSps = sps; codecPps = pps
             }
             override fun onSample(nalUnits: List<ByteArray>, ptsUs: Long, isKeyFrame: Boolean) {
-                val bytes = CastStreamingProtocol.annexB(nalUnits, codecSps, codecPps, isKeyFrame)
+                val bytes = CastStreamingProtocol.videoFrameData(codec, nalUnits,
+                    codecSps, codecPps, isKeyFrame)
                 sender?.sendVideo(bytes, ptsUs, isKeyFrame)
             }
         })

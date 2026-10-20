@@ -18,11 +18,19 @@ internal object CastStreamingProtocol {
     const val MIRRORING_APP = "0F5096E8"
     const val AUDIO_MIRRORING_APP = "85CDB22F"
     const val VIDEO_PAYLOAD_TYPE = 96
+    const val VP8_PAYLOAD_TYPE = 100
+    const val VP9_PAYLOAD_TYPE = 103
     const val AUDIO_PAYLOAD_TYPE = 127
     const val AUDIO_SAMPLE_RATE = 48_000
     const val TARGET_DELAY_MS = 200
     const val MAX_PACKET_BYTES = 1472
     private const val MAX_PAYLOAD_BYTES = MAX_PACKET_BYTES - 23
+
+    enum class VideoCodec(val wireName: String, val mimeType: String, val payloadType: Int) {
+        H264("h264", "video/avc", VIDEO_PAYLOAD_TYPE),
+        VP8("vp8", "video/x-vnd.on2.vp8", VP8_PAYLOAD_TYPE),
+        VP9("vp9", "video/x-vnd.on2.vp9", VP9_PAYLOAD_TYPE),
+    }
 
     data class VideoStream(
         val ssrc: Int,
@@ -34,17 +42,21 @@ internal object CastStreamingProtocol {
         val bitRate: Int,
         val targetDelayMs: Int = TARGET_DELAY_MS,
         val minBitRate: Int = 750_000,
+        val codec: VideoCodec = VideoCodec.H264,
+        val resolutions: List<Pair<Int, Int>>? = null,
     ) {
         init {
             require(key.size == 16 && ivMask.size == 16)
         }
 
         companion object {
-            fun random(width: Int, height: Int, fps: Int, bitRate: Int): VideoStream {
+            fun random(width: Int, height: Int, fps: Int, bitRate: Int,
+                       codec: VideoCodec = VideoCodec.H264): VideoStream {
                 val rng = SecureRandom()
                 return VideoStream(rng.nextInt(Int.MAX_VALUE - 1) + 1,
                     ByteArray(16).also(rng::nextBytes),
-                    ByteArray(16).also(rng::nextBytes), width, height, fps, bitRate)
+                    ByteArray(16).also(rng::nextBytes), width, height, fps, bitRate,
+                    codec = codec)
             }
         }
     }
@@ -69,12 +81,13 @@ internal object CastStreamingProtocol {
         require(videoStreams.isNotEmpty())
         val streams = JSONArray()
         if (audio != null) streams.put(audioOfferStream(audio))
-        videoStreams.forEachIndexed { index, stream -> streams.put(JSONObject()
+        videoStreams.forEachIndexed { index, stream ->
+            val video = JSONObject()
                 .put("index", index + if (audio == null) 0 else 1)
                 .put("type", "video_source")
-                .put("codecName", "h264")
+                .put("codecName", stream.codec.wireName)
                 .put("rtpProfile", "cast")
-                .put("rtpPayloadType", VIDEO_PAYLOAD_TYPE)
+                .put("rtpPayloadType", stream.codec.payloadType)
                 .put("ssrc", stream.ssrc.toLong() and 0xffffffffL)
                 .put("targetDelay", stream.targetDelayMs)
                 .put("aesKey", stream.key.toHex())
@@ -83,7 +96,15 @@ internal object CastStreamingProtocol {
                 .put("maxFrameRate", "${stream.fps}/1")
                 .put("maxBitRate", stream.bitRate)
                 .put("errorRecoveryMode", "intra_mb_refresh")
-                .put("profile", "baseline")
+                .put("resolutions", JSONArray().apply {
+                    (stream.resolutions ?: CastVideoQuality.profiles.filter {
+                        it.width <= stream.width && it.height <= stream.height
+                    }.map { it.width to it.height }.distinct()).forEach { (width, height) ->
+                        put(JSONObject().put("width", width).put("height", height))
+                    }
+                })
+                .put("receiverRtcpEventLog", false)
+            if (stream.codec == VideoCodec.H264) video.put("profile", "baseline")
                 .put("level", when {
                     stream.width * stream.height >= 3840 * 2160 -> "5.1"
                     stream.width * stream.height >= 1920 * 1080 && stream.fps > 30 -> "4.2"
@@ -92,14 +113,8 @@ internal object CastStreamingProtocol {
                     stream.width * stream.height >= 1280 * 720 -> "3.1"
                     else -> "3"
                 })
-                .put("resolutions", JSONArray().apply {
-                    CastVideoQuality.profiles.filter {
-                        it.width <= stream.width && it.height <= stream.height
-                    }.map { it.width to it.height }.distinct().forEach { (width, height) ->
-                        put(JSONObject().put("width", width).put("height", height))
-                    }
-                })
-                .put("receiverRtcpEventLog", false)) }
+            streams.put(video)
+        }
         return offerMessage(seqNum, streams)
     }
 
@@ -151,15 +166,20 @@ internal object CastStreamingProtocol {
     }
 
     fun answer(message: JSONObject, expectedSeq: Int, videoIndexes: List<Int>,
+               audioIndex: Int?): Answer = answer(message, expectedSeq,
+        videoIndexes.associateWith { VideoCodec.H264 }, audioIndex)
+
+    fun answer(message: JSONObject, expectedSeq: Int, videoCodecs: Map<Int, VideoCodec>,
                audioIndex: Int?): Answer {
         val (answer, indexes) = parseAnswer(message, expectedSeq)
-        val selectedVideos = videoIndexes.filter { index ->
+        val selectedVideos = videoCodecs.keys.filter { index ->
             (0 until indexes.length()).any { indexes.optInt(it, -1) == index }
         }
         require(selectedVideos.size == 1) {
-            "receiver did not accept H.264 video"
+            "receiver did not accept a supported video stream"
         }
         val videoIndex = selectedVideos.single()
+        val selectedCodec = videoCodecs.getValue(videoIndex)
         val video = answer.optJSONObject("constraints")?.optJSONObject("video")
         val dimensions = video?.optJSONObject("maxDimensions")
         val minimum = video?.optJSONObject("minResolution")
@@ -183,8 +203,8 @@ internal object CastStreamingProtocol {
                     it.minBitRate > 0 && it.minBitRate <= it.maxBitRate) {
                     "invalid Cast video constraints"
                 }
-                require(video.optString("codecName", "h264") == "h264") {
-                    "receiver constraints do not allow H.264"
+                require(video.optString("codecName", selectedCodec.wireName) == selectedCodec.wireName) {
+                    "receiver constraints do not match selected video codec"
                 }
             }
         } else null
@@ -250,6 +270,12 @@ internal object CastStreamingProtocol {
         return output.toByteArray()
     }
 
+    fun videoFrameData(codec: VideoCodec, parts: List<ByteArray>, sps: ByteArray?,
+                       pps: ByteArray?, keyFrame: Boolean): ByteArray = when (codec) {
+        VideoCodec.H264 -> annexB(parts, sps, pps, keyFrame)
+        VideoCodec.VP8, VideoCodec.VP9 -> parts.single()
+    }
+
     class Packetizer(
         private val ssrc: Int,
         private val key: ByteArray,
@@ -259,7 +285,7 @@ internal object CastStreamingProtocol {
         sequenceStart: Int = SecureRandom().nextInt(),
     ) {
         constructor(stream: VideoStream, sequenceStart: Int = SecureRandom().nextInt()) :
-            this(stream.ssrc, stream.key, stream.ivMask, VIDEO_PAYLOAD_TYPE,
+            this(stream.ssrc, stream.key, stream.ivMask, stream.codec.payloadType,
                 stream.targetDelayMs, sequenceStart)
         constructor(stream: AudioStream, sequenceStart: Int = SecureRandom().nextInt()) :
             this(stream.ssrc, stream.key, stream.ivMask, AUDIO_PAYLOAD_TYPE,

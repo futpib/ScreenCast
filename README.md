@@ -27,6 +27,8 @@ accepted a native video stream, stopped acknowledging it, then accepted the
 WebRTC offer and sent an invalid answer. The app replaced the virtual display's
 surface for WebRTC and HLS. This verifies capture handoff on the emulator; TV
 playback and glass-to-glass latency still need device testing.
+An Android 15 emulator test also encoded and decoded VP8 and VP9 key frames
+through the app's MediaCodec path. It does not verify those codecs on a Cast TV.
 
 <p>
   <img src="docs/screenshots/local-receiver-mirroring.png" width="240" alt="Emulator mirroring screen to the local test receiver at 10.0.2.2" />
@@ -39,8 +41,9 @@ The home screen offers **Mirror my screen**, **Cast phone audio**, **Play a file
 or link**, **Control my TV**, and **Mirror to several TVs**. For one-TV mirroring, the app tries stock
 Cast Streaming first, then its WebRTC receiver if configured, then HLS. A
 connection failure advances to the next method; cancelling screen-sharing
-consent ends the attempt. Android asks for fresh screen-sharing consent on each
-retry. On Android 14+, each TV offers **Whole screen** and **One app** capture.
+consent ends the attempt. Android asks for screen-sharing consent once per
+mirroring session; transport retries reuse it. On Android 14+, each TV offers
+**Whole screen** and **One app** capture.
 If the app falls back to HLS, it shows the higher delay in the mirroring status.
 The **Mirror to several TVs** button uses HLS, which can share one capture
 across up to four receivers.
@@ -68,14 +71,18 @@ Choose **Mirror my screen** to try this path first on a stock Cast receiver, or
 select **Native** directly from Advanced modes.
 This mode launches the stock Android mirroring receiver (`674A0243`, with the
 default Cast Streaming receiver `0F5096E8` as a fallback), negotiates a
-Cast Streaming `OFFER`/`ANSWER`, and sends H.264 video and Opus playback audio
+Cast Streaming `OFFER`/`ANSWER`, and sends the receiver's chosen H.264, VP8, or
+VP9 video stream with Opus playback audio
 as encrypted Cast RTP over UDP. Both streams share one UDP socket. The app
 handles RTCP sender reports, acknowledgements, retransmissions, and keyframe
 requests. It paces video packets, gives audio slots during large video frames,
-and adjusts the H.264 bitrate from acknowledgement progress, round-trip time,
+and adjusts the video bitrate from acknowledgement progress, round-trip time,
 loss, and frames stalled in transit. The offer includes separate video profiles
-from 360p30 through 1080p60 and an optional 4K30 profile where a hardware
-encoder supports it. The 1080p60 and 4K30 offers allow up to 10 and 12 Mbps,
+from 360p30 through 1080p60 for each codec with a suitable phone encoder, and
+an optional 4K30 profile where a hardware encoder supports it. On Android 10+
+the VP8 and VP9 offers require hardware encoders so a software codec does not
+replace a better H.264 stream on receivers that prefer VP8 or VP9. The 1080p60 and
+4K30 offers allow up to 10 and 12 Mbps,
 respectively, when the receiver accepts those rates. The receiver chooses a
 profile, then its reported dimensions, pixel rate, frame rate, bitrate, and
 delay further limit the capture. The encoder and rate controller stay within
@@ -104,7 +111,7 @@ leaves phone volume unchanged.
 The requested playout delay is 200 ms or less when the receiver requires it;
 actual glass-to-glass latency depends on the device and network and has not
 been measured for this build. The earlier audio and video sender was tested
-against a stock MiTV-MOEU0 receiver; device authentication, the expanded offer,
+against a stock MiTV-MOEU0 receiver; device authentication, VP8/VP9 selection,
 adaptive flow control, and capture handoff still need a TV regression test. Receiver
 certificate revocation lists are not checked, matching Open Screen's optional
 CRL policy. Android cannot capture protected content or audio from apps that

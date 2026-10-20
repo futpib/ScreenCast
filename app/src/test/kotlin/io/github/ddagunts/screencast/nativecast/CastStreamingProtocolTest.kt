@@ -130,6 +130,59 @@ class CastStreamingProtocolTest {
         assertFalse(selected.audioAccepted)
     }
 
+    @Test fun receiverCanChooseVp8OrVp9WithoutChangingH264Offer() {
+        val vp8 = stream.copy(ssrc = 42, codec = CastStreamingProtocol.VideoCodec.VP8,
+            resolutions = listOf(640 to 360))
+        val vp9 = stream.copy(ssrc = 43, codec = CastStreamingProtocol.VideoCodec.VP9)
+        val offers = CastStreamingProtocol.offer(13, listOf(stream, vp8, vp9))
+            .getJSONObject("offer").getJSONArray("supportedStreams")
+        assertEquals("h264", offers.getJSONObject(0).getString("codecName"))
+        assertEquals(96, offers.getJSONObject(0).getInt("rtpPayloadType"))
+        assertEquals("vp8", offers.getJSONObject(1).getString("codecName"))
+        assertEquals(100, offers.getJSONObject(1).getInt("rtpPayloadType"))
+        assertFalse(offers.getJSONObject(1).has("profile"))
+        val vp8Resolutions = offers.getJSONObject(1).getJSONArray("resolutions")
+        assertEquals(1, vp8Resolutions.length())
+        assertEquals(640, vp8Resolutions.getJSONObject(0).getInt("width"))
+        assertEquals("vp9", offers.getJSONObject(2).getString("codecName"))
+        assertEquals(103, offers.getJSONObject(2).getInt("rtpPayloadType"))
+        val codecs = mapOf(0 to stream.codec, 1 to vp8.codec, 2 to vp9.codec)
+        for ((index, codec) in listOf(1 to vp8.codec, 2 to vp9.codec)) {
+            val answer = JSONObject("""{"type":"ANSWER","seqNum":13,"result":"ok",
+                "answer":{"udpPort":5000,"sendIndexes":[$index],"constraints":{
+                    "video":{"codecName":"${codec.wireName}","maxDimensions":{
+                        "width":1280,"height":720,"frameRate":"30"},
+                        "maxBitRate":3000000}}}}""")
+            assertEquals(index, CastStreamingProtocol.answer(answer, 13, codecs, null).videoIndex)
+        }
+        val wrongCodec = JSONObject("""{"type":"ANSWER","seqNum":13,"result":"ok",
+            "answer":{"udpPort":5000,"sendIndexes":[1],"constraints":{
+                "video":{"codecName":"h264","maxDimensions":{
+                    "width":1280,"height":720,"frameRate":"30"},
+                    "maxBitRate":3000000}}}}""")
+        assertThrows(IllegalArgumentException::class.java) {
+            CastStreamingProtocol.answer(wrongCodec, 13, codecs, null)
+        }
+    }
+
+    @Test fun vp8AndVp9FramesKeepTheirEncodedBytesAndPayloadTypes() {
+        val encoded = byteArrayOf(0, 0, 1, 42, 7, 8)
+        for (codec in listOf(CastStreamingProtocol.VideoCodec.VP8,
+                CastStreamingProtocol.VideoCodec.VP9)) {
+            val frame = CastStreamingProtocol.videoFrameData(codec, listOf(encoded),
+                null, null, true)
+            assertArrayEquals(encoded, frame)
+            val video = stream.copy(codec = codec)
+            val packet = CastStreamingProtocol.Packetizer(video, 1)
+                .packetize(0, 90_000, true, frame).single()
+            assertEquals(codec.payloadType, packet[1].toInt() and 0x7f)
+            val cipher = Cipher.getInstance("AES/CTR/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(video.key, "AES"),
+                IvParameterSpec(video.ivMask))
+            assertArrayEquals(encoded, cipher.doFinal(packet.copyOfRange(23, packet.size)))
+        }
+    }
+
     @Test fun narrowReceiverBitrateSelectsSmallerCapture() {
         val limits = CastStreamingProtocol.VideoLimits(1920, 1080, 60.0,
             1920.0 * 1080 * 60, 800_000, 200)

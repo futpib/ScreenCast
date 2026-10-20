@@ -20,6 +20,7 @@ class VideoEncoder(
     private val bitrate: Int = 3_000_000,
     private val keyframeIntervalSec: Int = 2,
     private val codecName: String? = null,
+    private val mimeType: String = MediaFormat.MIMETYPE_VIDEO_AVC,
 ) {
     interface Sink {
         fun onFormat(sps: ByteArray, pps: ByteArray)
@@ -36,16 +37,18 @@ class VideoEncoder(
 
     fun start(sink: Sink) {
         this.sink = sink
-        val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
+        val format = MediaFormat.createVideoFormat(mimeType, width, height).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
             setInteger(MediaFormat.KEY_FRAME_RATE, fps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, keyframeIntervalSec)
-            setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
-            setInteger(MediaFormat.KEY_LEVEL, requiredAvcLevel(width, height, fps))
+            if (mimeType == MediaFormat.MIMETYPE_VIDEO_AVC) {
+                setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
+                setInteger(MediaFormat.KEY_LEVEL, requiredAvcLevel(width, height, fps))
+            }
             setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 1_000_000L / fps)
         }
-        codec = if (codecName == null) MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+        codec = if (codecName == null) MediaCodec.createEncoderByType(mimeType)
             else MediaCodec.createByCodecName(codecName)
         try {
             codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
@@ -131,9 +134,10 @@ class VideoEncoder(
                     if (info.size > 0 && (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0) {
                         val bytes = ByteArray(info.size)
                         buffer.position(info.offset); buffer.limit(info.offset + info.size); buffer.get(bytes)
-                        val nals = splitNals(bytes)
+                        val parts = if (mimeType == MediaFormat.MIMETYPE_VIDEO_AVC) splitNals(bytes)
+                            else listOf(bytes)
                         val key = (info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
-                        sink?.onSample(nals, info.presentationTimeUs, key)
+                        sink?.onSample(parts, info.presentationTimeUs, key)
                         framesOut++
                         if (framesOut == 1 || framesOut % 60 == 0) {
                             logI("encoder produced $framesOut frames (last key=$key pts=${info.presentationTimeUs})")
@@ -190,18 +194,27 @@ class VideoEncoder(
         }
 
         fun avcEncoderFor(width: Int, height: Int, fps: Int): String? =
+            encoderFor(MediaFormat.MIMETYPE_VIDEO_AVC, width, height, fps)
+
+        fun encoderFor(mimeType: String, width: Int, height: Int, fps: Int): String? =
             MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.firstOrNull { info ->
                 (width < 3840 || (Build.VERSION.SDK_INT >= 29 && info.isHardwareAccelerated)) &&
+                (mimeType == MediaFormat.MIMETYPE_VIDEO_AVC || Build.VERSION.SDK_INT < 29 ||
+                    info.isHardwareAccelerated) &&
                 info.isEncoder && info.supportedTypes.any {
-                    it.equals(MediaFormat.MIMETYPE_VIDEO_AVC, ignoreCase = true)
+                    it.equals(mimeType, ignoreCase = true)
                 } && runCatching {
-                    val capabilities = info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC)
+                    val capabilities = info.getCapabilitiesForType(mimeType)
+                    (mimeType == MediaFormat.MIMETYPE_VIDEO_AVC ||
+                        capabilities.colorFormats.contains(
+                            MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)) &&
                     capabilities.videoCapabilities?.areSizeAndRateSupported(
                         width, height, fps.toDouble()) == true &&
+                        (mimeType != MediaFormat.MIMETYPE_VIDEO_AVC ||
                         capabilities.profileLevels.any { it.profile in setOf(
                             MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline,
                             MediaCodecInfo.CodecProfileLevel.AVCProfileConstrainedBaseline) &&
-                            it.level >= requiredAvcLevel(width, height, fps) }
+                            it.level >= requiredAvcLevel(width, height, fps) })
                 }.getOrDefault(false)
             }?.name
     }
