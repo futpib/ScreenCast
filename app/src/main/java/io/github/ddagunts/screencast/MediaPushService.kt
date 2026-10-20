@@ -98,7 +98,7 @@ class MediaPushService : Service() {
                 publish(Snapshot(name, protocol, item.title, "Loading"))
                 if (protocol == PROTOCOL_CAST) {
                     val host = intent.getStringExtra(EXTRA_HOST) ?: error("Cast host missing")
-                    val session = CastSession(CastDevice(name, host,
+                    val session = CastSession(this@MediaPushService, CastDevice(name, host,
                         intent.getIntExtra(EXTRA_PORT, 8009)))
                     cast = session
                     try {

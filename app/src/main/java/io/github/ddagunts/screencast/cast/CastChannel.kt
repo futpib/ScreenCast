@@ -1,6 +1,7 @@
 package io.github.ddagunts.screencast.cast
 
 import android.annotation.SuppressLint
+import android.content.Context
 import io.github.ddagunts.screencast.util.logD
 import io.github.ddagunts.screencast.util.logE
 import io.github.ddagunts.screencast.util.logI
@@ -25,6 +26,7 @@ import javax.net.ssl.SSLSocketFactory
 import javax.net.ssl.X509TrustManager
 
 class CastChannel(
+    private val context: Context,
     private val host: String,
     private val port: Int,
 ) {
@@ -54,6 +56,7 @@ class CastChannel(
         try {
             s.soTimeout = 5_000
             s.startHandshake()
+            authenticate(s)
             s.soTimeout = 0
         } catch (e: Throwable) {
             s.close()
@@ -73,7 +76,7 @@ class CastChannel(
                     val buf = ByteArray(len)
                     input.readFully(buf)
                     val msg = CastMessage.decode(buf)
-                    logD("<< ${msg.namespace} ${msg.payloadUtf8.take(500)}")
+                    logD("<< ${msg.namespace} ${if (msg.payloadBinary == null) msg.payloadUtf8.take(500) else "binary payload"}")
                     _incoming.emit(msg)
                 }
             }.onFailure { e ->
@@ -91,7 +94,8 @@ class CastChannel(
             o.write(data)
             o.flush()
         }
-        val shown = if (msg.namespace == "urn:x-cast:com.google.cast.webrtc" &&
+        val shown = if (msg.payloadBinary != null) "binary payload"
+        else if (msg.namespace == "urn:x-cast:com.google.cast.webrtc" &&
             msg.payloadUtf8.contains("\"aesKey\"")) "OFFER (key material omitted)"
         else msg.payloadUtf8.take(500)
         logD(">> ${msg.namespace} $shown")
@@ -103,8 +107,26 @@ class CastChannel(
         socket = null; out = null
     }
 
-    // Chromecasts present a self-signed device certificate that rotates on
-    // every reboot, so we cannot pin it and we don't bundle the Cast root CA.
+    private fun authenticate(socket: SSLSocket) {
+        val peer = socket.session.peerCertificates.firstOrNull() as? X509Certificate
+            ?: error("Cast TLS certificate missing")
+        val nonce = CastDeviceAuth.freshNonce()
+        val challenge = CastDeviceAuth.challenge(nonce).encode()
+        DataOutputStream(socket.outputStream).apply {
+            writeInt(challenge.size)
+            write(challenge)
+            flush()
+        }
+        val input = DataInputStream(socket.inputStream)
+        val length = input.readInt()
+        require(length in 1..65_536) { "invalid Cast auth response length" }
+        val response = ByteArray(length).also(input::readFully)
+        CastDeviceAuth.verify(context, CastMessage.decode(response), nonce, peer)
+        logI("Cast device authenticated at $host:$port")
+    }
+
+    // Cast TLS certificates rotate; the device-auth challenge above validates
+    // the certificate against the Cast root before any other messages are sent.
     // The trust-all manager is only installed on this one SSLContext and handed
     // to the Cast socket; it is not set as the JVM default.
     @SuppressLint("CustomX509TrustManager", "TrustAllX509TrustManager")

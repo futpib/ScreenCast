@@ -46,7 +46,8 @@ class WebRtcProjectionRequestActivity : ComponentActivity() {
         if (savedInstanceState == null) {
             val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             launcher.launch(mpm.createCastCaptureIntent(
-                intent.hasExtra(StartPermissionActivity.EXTRA_MIRROR_ATTEMPT_ID)))
+                intent.getBooleanExtra(StartPermissionActivity.EXTRA_WHOLE_SCREEN,
+                    intent.hasExtra(StartPermissionActivity.EXTRA_MIRROR_ATTEMPT_ID))))
         }
     }
 }

@@ -30,6 +30,7 @@ class CastStreamingProtocolTest {
         val video = offer.getJSONObject("offer").getJSONArray("supportedStreams").getJSONObject(0)
         assertEquals("mirroring", offer.getJSONObject("offer").getString("castMode"))
         assertEquals("h264", video.getString("codecName"))
+        assertEquals("intra_mb_refresh", video.getString("errorRecoveryMode"))
         assertEquals(96, video.getInt("rtpPayloadType"))
         assertEquals("1/90000", video.getString("timeBase"))
         assertEquals(32, video.getString("aesKey").length)
@@ -66,6 +67,63 @@ class CastStreamingProtocolTest {
             CastStreamingProtocol.answer(JSONObject("""{"type":"ANSWER","seqNum":4,"result":"ok",
                 "answer":{"udpPort":2345,"sendIndexes":[0]}}"""), 4, 1)
         }
+    }
+
+    @Test fun receiverConstraintsBoundCaptureAndBitrate() {
+        val answer = JSONObject("""{"type":"ANSWER","seqNum":2,"result":"ok",
+            "answer":{"udpPort":5000,"sendIndexes":[0,1],"constraints":{
+                "video":{"codecName":"h264","maxDimensions":{"width":1280,
+                    "height":720,"frameRate":"30000/1001"},
+                    "minResolution":{"width":640,"height":360},
+                    "maxPixelsPerSecond":28000000,"minBitRate":500000,
+                    "maxBitRate":1500000,"maxDelay":500},
+                "audio":{"codecName":"opus","maxSampleRate":48000,"maxChannels":2,
+                    "maxBitRate":128000}}}}""")
+        val accepted = CastStreamingProtocol.answer(answer, 2, 1)
+        assertTrue(accepted.audioAccepted)
+        assertEquals(1500000, accepted.videoLimits!!.maxBitRate)
+        assertEquals(500000, accepted.videoLimits!!.minBitRate)
+        assertEquals(30000.0 / 1001, accepted.videoLimits!!.maxFrameRate, 0.0001)
+        val chosen = CastVideoQuality.select(accepted.videoLimits) { true }
+        assertEquals(1280, chosen.width)
+        assertEquals(720, chosen.height)
+        assertEquals(29, chosen.fps)
+        assertEquals(1500000, chosen.bitrate)
+        assertTrue(chosen.width.toDouble() * chosen.height * chosen.fps <=
+            accepted.videoLimits!!.maxPixelsPerSecond)
+        val candidates = CastVideoQuality.candidates(accepted.videoLimits) { true }
+        assertEquals(candidates.size, candidates.map { Triple(it.width, it.height, it.fps) }
+            .distinct().size)
+        assertTrue(candidates.all { it.width >= 640 && it.height >= 360 &&
+            it.bitrate in 500_000..1_500_000 })
+    }
+
+    @Test fun receiverCanChooseLowerLevelVideoOffer() {
+        val lower = stream.copy(ssrc = 42, width = 640, height = 360,
+            fps = 30, bitRate = 900_000)
+        val offer = CastStreamingProtocol.offer(3, listOf(stream, lower))
+            .getJSONObject("offer").getJSONArray("supportedStreams")
+        assertEquals("3.1", offer.getJSONObject(0).getString("level"))
+        assertEquals("3", offer.getJSONObject(1).getString("level"))
+        val answer = JSONObject("""{"type":"ANSWER","seqNum":3,"result":"ok",
+            "answer":{"udpPort":5000,"sendIndexes":[1]}}""")
+        val selected = CastStreamingProtocol.answer(answer, 3, listOf(0, 1), null)
+        assertEquals(1, selected.videoIndex)
+        assertFalse(selected.audioAccepted)
+    }
+
+    @Test fun narrowReceiverBitrateSelectsSmallerCapture() {
+        val limits = CastStreamingProtocol.VideoLimits(1920, 1080, 60.0,
+            1920.0 * 1080 * 60, 800_000, 200)
+        val chosen = CastVideoQuality.select(limits) { true }
+        assertEquals(960, chosen.width)
+        assertEquals(540, chosen.height)
+        assertEquals(800_000, chosen.bitrate)
+        val controller = CastRateController(800_000, maxBitrate = chosen.bitrate)
+        controller.onCheckpoint(1_000, 100)
+        repeat(20) { controller.onCheckpoint(5_000L + it * 4_000, 100)
+            controller.update(5_001L + it * 4_000, 0) }
+        assertTrue(controller.bitrate <= chosen.bitrate)
     }
 
     @Test fun audioOnlyOfferAndAnswerDoNotRequireVideo() {

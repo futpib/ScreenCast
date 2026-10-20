@@ -43,4 +43,13 @@ class CastRateControllerTest {
         }
         assertEquals(6_000_000, control.bitrate)
     }
+
+    @Test fun receiverBackpressureDropsRateWithinNegotiatedLimit() {
+        val control = CastRateController(1_000_000, maxBitrate = 1_000_000)
+        control.onCheckpoint(1_000, 1)
+        assertEquals(750_000, control.onBackpressure(2_000))
+        assertNull(control.update(2_500, 0, 200))
+        control.onCheckpoint(6_000, 12)
+        assertEquals(850_000, control.update(6_100, 0, 200))
+    }
 }

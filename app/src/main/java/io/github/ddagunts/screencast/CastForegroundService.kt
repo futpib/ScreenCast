@@ -433,7 +433,7 @@ class CastForegroundService : Service() {
                 }
             }
 
-            val s = CastSession(dev)
+            val s = CastSession(this@CastForegroundService, dev)
             sessions[host] = s
             // child jobs — cancelled when the parent (sessionJobs[host]) is cancelled
             launch {

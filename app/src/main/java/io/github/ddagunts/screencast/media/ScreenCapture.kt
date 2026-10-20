@@ -33,6 +33,15 @@ class ScreenCapture(private val context: Context) {
         paused = value
     }
 
+    @Synchronized fun replaceSurface(next: Surface, size: Size) {
+        val display = virtualDisplay ?: error("capture display is not active")
+        display.setSurface(null)
+        display.resize(size.width, size.height, size.dpi)
+        surface = next
+        display.setSurface(if (paused) null else next)
+        logI("VirtualDisplay resized ${size.width}x${size.height}")
+    }
+
     @Synchronized fun stop() {
         virtualDisplay?.release(); virtualDisplay = null
         surface = null

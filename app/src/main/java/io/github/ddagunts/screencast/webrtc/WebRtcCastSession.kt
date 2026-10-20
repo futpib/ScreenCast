@@ -54,7 +54,7 @@ class WebRtcCastSession(
     val device: CastDevice,
     private val sessionConfig: WebRtcSessionConfig,
 ) {
-    private val channel = CastChannel(device.host, device.port)
+    private val channel = CastChannel(context, device.host, device.port)
     private val _state = MutableStateFlow<WebRtcState>(WebRtcState.Idle)
     val state: StateFlow<WebRtcState> = _state
 

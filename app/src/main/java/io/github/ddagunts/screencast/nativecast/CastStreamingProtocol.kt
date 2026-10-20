@@ -32,6 +32,8 @@ internal object CastStreamingProtocol {
         val height: Int,
         val fps: Int,
         val bitRate: Int,
+        val targetDelayMs: Int = TARGET_DELAY_MS,
+        val minBitRate: Int = 750_000,
     ) {
         init {
             require(key.size == 16 && ivMask.size == 16)
@@ -60,31 +62,43 @@ internal object CastStreamingProtocol {
         }
     }
 
-    fun offer(seqNum: Int, stream: VideoStream, audio: AudioStream? = null): JSONObject {
+    fun offer(seqNum: Int, stream: VideoStream, audio: AudioStream? = null): JSONObject =
+        offer(seqNum, listOf(stream), audio)
+
+    fun offer(seqNum: Int, videoStreams: List<VideoStream>, audio: AudioStream? = null): JSONObject {
+        require(videoStreams.isNotEmpty())
         val streams = JSONArray()
         if (audio != null) streams.put(audioOfferStream(audio))
-        streams.put(JSONObject()
-                .put("index", if (audio == null) 0 else 1)
+        videoStreams.forEachIndexed { index, stream -> streams.put(JSONObject()
+                .put("index", index + if (audio == null) 0 else 1)
                 .put("type", "video_source")
                 .put("codecName", "h264")
                 .put("rtpProfile", "cast")
                 .put("rtpPayloadType", VIDEO_PAYLOAD_TYPE)
                 .put("ssrc", stream.ssrc.toLong() and 0xffffffffL)
-                .put("targetDelay", TARGET_DELAY_MS)
+                .put("targetDelay", stream.targetDelayMs)
                 .put("aesKey", stream.key.toHex())
                 .put("aesIvMask", stream.ivMask.toHex())
                 .put("timeBase", "1/90000")
                 .put("maxFrameRate", "${stream.fps}/1")
                 .put("maxBitRate", stream.bitRate)
+                .put("errorRecoveryMode", "intra_mb_refresh")
                 .put("profile", "baseline")
                 .put("level", when {
+                    stream.width * stream.height >= 1920 * 1080 && stream.fps > 30 -> "4.2"
                     stream.width * stream.height >= 1920 * 1080 -> "4"
+                    stream.width * stream.height >= 1280 * 720 && stream.fps > 30 -> "3.2"
                     stream.width * stream.height >= 1280 * 720 -> "3.1"
                     else -> "3"
                 })
-                .put("resolutions", JSONArray().put(JSONObject()
-                    .put("width", stream.width).put("height", stream.height)))
-                .put("receiverRtcpEventLog", false))
+                .put("resolutions", JSONArray().apply {
+                    CastVideoQuality.profiles.filter {
+                        it.width <= stream.width && it.height <= stream.height
+                    }.map { it.width to it.height }.distinct().forEach { (width, height) ->
+                        put(JSONObject().put("width", width).put("height", height))
+                    }
+                })
+                .put("receiverRtcpEventLog", false)) }
         return offerMessage(seqNum, streams)
     }
 
@@ -113,15 +127,79 @@ internal object CastStreamingProtocol {
             .put("castMode", "mirroring")
             .put("supportedStreams", streams))
 
-    data class Answer(val port: Int, val audioAccepted: Boolean)
+    data class VideoLimits(
+        val maxWidth: Int,
+        val maxHeight: Int,
+        val maxFrameRate: Double,
+        val maxPixelsPerSecond: Double,
+        val maxBitRate: Int,
+        val maxDelayMs: Int,
+        val minWidth: Int = 0,
+        val minHeight: Int = 0,
+        val minBitRate: Int = 300_000,
+    )
+
+    data class Answer(val port: Int, val audioAccepted: Boolean,
+                      val videoLimits: VideoLimits? = null,
+                      val videoIndex: Int = -1)
 
     fun answer(message: JSONObject, expectedSeq: Int, videoIndex: Int): Answer {
+        val selected = answer(message, expectedSeq, listOf(videoIndex),
+            if (videoIndex == 1) 0 else null)
+        return selected.copy(videoIndex = -1)
+    }
+
+    fun answer(message: JSONObject, expectedSeq: Int, videoIndexes: List<Int>,
+               audioIndex: Int?): Answer {
         val (answer, indexes) = parseAnswer(message, expectedSeq)
-        require((0 until indexes.length()).any { indexes.optInt(it, -1) == videoIndex }) {
+        val selectedVideos = videoIndexes.filter { index ->
+            (0 until indexes.length()).any { indexes.optInt(it, -1) == index }
+        }
+        require(selectedVideos.size == 1) {
             "receiver did not accept H.264 video"
         }
-        return Answer(answer.getInt("udpPort"), videoIndex == 1 &&
-            (0 until indexes.length()).any { indexes.optInt(it, -1) == 0 })
+        val videoIndex = selectedVideos.single()
+        val video = answer.optJSONObject("constraints")?.optJSONObject("video")
+        val dimensions = video?.optJSONObject("maxDimensions")
+        val minimum = video?.optJSONObject("minResolution")
+        val limits = if (video != null) {
+            val frameRate = dimensions?.optString("frameRate", "60")?.let(::parseFrameRate) ?: 60.0
+            VideoLimits(
+                dimensions?.optInt("width", Int.MAX_VALUE) ?: Int.MAX_VALUE,
+                dimensions?.optInt("height", Int.MAX_VALUE) ?: Int.MAX_VALUE,
+                frameRate,
+                video.optDouble("maxPixelsPerSecond", Double.POSITIVE_INFINITY),
+                video.optInt("maxBitRate", Int.MAX_VALUE),
+                video.optInt("maxDelay", 1200),
+                minimum?.optInt("width", 0) ?: 0,
+                minimum?.optInt("height", 0) ?: 0,
+                video.optInt("minBitRate", 300_000),
+            ).also {
+                require(it.maxWidth > 0 && it.maxHeight > 0 && it.maxFrameRate > 0 &&
+                    it.maxPixelsPerSecond > 0 && it.maxBitRate > 0 && it.maxDelayMs > 0 &&
+                    it.minWidth >= 0 && it.minHeight >= 0 &&
+                    it.minWidth <= it.maxWidth && it.minHeight <= it.maxHeight &&
+                    it.minBitRate > 0 && it.minBitRate <= it.maxBitRate) {
+                    "invalid Cast video constraints"
+                }
+                require(video.optString("codecName", "h264") == "h264") {
+                    "receiver constraints do not allow H.264"
+                }
+            }
+        } else null
+        val audioAccepted = audioIndex != null &&
+            (0 until indexes.length()).any { indexes.optInt(it, -1) == audioIndex } &&
+            audioFits(answer.optJSONObject("constraints")?.optJSONObject("audio"))
+        return Answer(answer.getInt("udpPort"), audioAccepted, limits, videoIndex)
+    }
+
+    private fun parseFrameRate(value: String): Double {
+        val parts = value.split('/')
+        require(parts.size in 1..2) { "invalid receiver frame rate" }
+        val numerator = parts[0].toDoubleOrNull() ?: error("invalid receiver frame rate")
+        val denominator = if (parts.size == 2) parts[1].toDoubleOrNull() ?: 0.0 else 1.0
+        require(denominator > 0) { "invalid receiver frame rate" }
+        return numerator / denominator
     }
 
     fun audioOnlyAnswer(message: JSONObject, expectedSeq: Int): Int {
@@ -129,8 +207,19 @@ internal object CastStreamingProtocol {
         require((0 until indexes.length()).any { indexes.optInt(it, -1) == 0 }) {
             "receiver did not accept Opus audio"
         }
+        require(audioFits(answer.optJSONObject("constraints")?.optJSONObject("audio"))) {
+            "receiver constraints do not allow 48 kHz stereo Opus"
+        }
         return answer.getInt("udpPort")
     }
+
+    private fun audioFits(audio: JSONObject?): Boolean = audio == null ||
+        (audio.optString("codecName", "opus") == "opus" &&
+            audio.optInt("maxSampleRate", AUDIO_SAMPLE_RATE) >= AUDIO_SAMPLE_RATE &&
+            audio.optInt("maxChannels", 2) >= 2 &&
+            audio.optInt("maxBitRate", 320_000) >= 128_000 &&
+            audio.optInt("minBitRate", 32_000) <= 128_000 &&
+            audio.optInt("maxDelay", 1200) >= TARGET_DELAY_MS)
 
     private fun parseAnswer(message: JSONObject, expectedSeq: Int): Pair<JSONObject, JSONArray> {
         require(message.optString("type") == "ANSWER" && message.optInt("seqNum", -1) == expectedSeq) {
@@ -165,12 +254,15 @@ internal object CastStreamingProtocol {
         private val key: ByteArray,
         private val ivMask: ByteArray,
         private val payloadType: Int,
+        private val targetDelayMs: Int,
         sequenceStart: Int = SecureRandom().nextInt(),
     ) {
         constructor(stream: VideoStream, sequenceStart: Int = SecureRandom().nextInt()) :
-            this(stream.ssrc, stream.key, stream.ivMask, VIDEO_PAYLOAD_TYPE, sequenceStart)
+            this(stream.ssrc, stream.key, stream.ivMask, VIDEO_PAYLOAD_TYPE,
+                stream.targetDelayMs, sequenceStart)
         constructor(stream: AudioStream, sequenceStart: Int = SecureRandom().nextInt()) :
-            this(stream.ssrc, stream.key, stream.ivMask, AUDIO_PAYLOAD_TYPE, sequenceStart)
+            this(stream.ssrc, stream.key, stream.ivMask, AUDIO_PAYLOAD_TYPE,
+                TARGET_DELAY_MS, sequenceStart)
         private var sequence = sequenceStart and 0xffff
 
         fun packetize(frameId: Long, rtpTimestamp: Int, keyFrame: Boolean, data: ByteArray): List<ByteArray> {
@@ -204,7 +296,7 @@ internal object CastStreamingProtocol {
                     .apply {
                         if (extension) {
                             putShort(((1 shl 10) or 2).toShort())
-                            putShort(TARGET_DELAY_MS.toShort())
+                            putShort(targetDelayMs.toShort())
                         }
                     }
                     .put(encrypted, start, end - start)

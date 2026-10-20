@@ -1,6 +1,6 @@
 package io.github.ddagunts.screencast.ui
 
-import androidx.compose.foundation.clickable
+import android.os.Build
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -41,11 +41,20 @@ fun MirrorIntentScreen(vm: MirrorIntentViewModel, devicesVm: WebRtcViewModel) {
         }
         if (devices.isEmpty()) Text("Looking for TVs on this network…")
         for (device in devices) {
-            Card(Modifier.fillMaxWidth().clickable(enabled = !state.busy) { vm.start(device) }) {
-                Row(Modifier.padding(16.dp)) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Column {
                         Text(device.name)
                         Text(device.host, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { vm.start(device) }, enabled = !state.busy) {
+                            Text("Whole screen")
+                        }
+                        if (Build.VERSION.SDK_INT >= 34) {
+                            Button(onClick = { vm.start(device, wholeScreen = false) },
+                                enabled = !state.busy) { Text("One app") }
+                        }
                     }
                 }
             }

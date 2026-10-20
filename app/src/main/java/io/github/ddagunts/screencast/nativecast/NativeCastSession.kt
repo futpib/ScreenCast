@@ -17,7 +17,6 @@ import io.github.ddagunts.screencast.cast.connectMsg
 import io.github.ddagunts.screencast.cast.launchMsg
 import io.github.ddagunts.screencast.cast.pingMsg
 import io.github.ddagunts.screencast.cast.pongMsg
-import io.github.ddagunts.screencast.media.Resolution
 import io.github.ddagunts.screencast.media.ScreenCapture
 import io.github.ddagunts.screencast.media.PhoneMediaVolume
 import io.github.ddagunts.screencast.media.VideoEncoder
@@ -43,10 +42,10 @@ internal class NativeCastSession(private val context: Context, val device: CastD
     private data class App(val sessionId: String, val transportId: String)
 
     private val scope = CoroutineScope(Dispatchers.IO + Job())
-    private val channel = CastChannel(device.host, device.port)
+    private val channel = CastChannel(context, device.host, device.port)
     private val launched = CompletableDeferred<App>()
     private val answered = CompletableDeferred<JSONObject>()
-    private val stream = CastStreamingProtocol.VideoStream.random(1280, 720, 30, 3_000_000)
+    private var stream: CastStreamingProtocol.VideoStream? = null
     private val audioStream = CastStreamingProtocol.AudioStream.random()
     private val _state = MutableStateFlow("CONNECTING")
     val state: StateFlow<String> = _state
@@ -55,6 +54,9 @@ internal class NativeCastSession(private val context: Context, val device: CastD
     private var encoder: VideoEncoder? = null
     private var audioEncoder: OpusPlaybackEncoder? = null
     @Volatile private var capture: ScreenCapture? = null
+    private val qualityLock = Any()
+    private var activeProfile: CastVideoQuality.Profile? = null
+    private var profileController: CastAdaptiveProfileController? = null
     private var projection: MediaProjection? = null
     private var lastHeartbeat = System.currentTimeMillis()
     @Volatile private var stopped = false
@@ -92,21 +94,53 @@ internal class NativeCastSession(private val context: Context, val device: CastD
             audioEncoder = OpusPlaybackEncoder.prepare(context, mp)
             if (audioOnly && audioEncoder == null) error("playback audio capture is unavailable")
             val offeredAudio = audioEncoder != null
+            val offeredProfiles = if (audioOnly) emptyList() else CastVideoQuality.profiles.filter {
+                VideoEncoder.avcEncoderFor(it.width, it.height, it.fps) != null
+            }.also { require(it.isNotEmpty()) { "phone has no supported H.264 encoder" } }
+            val offeredVideos = offeredProfiles.map {
+                CastStreamingProtocol.VideoStream.random(it.width, it.height, it.fps, it.bitrate)
+            }
             val offer = if (audioOnly) CastStreamingProtocol.audioOnlyOffer(1, audioStream)
-                else CastStreamingProtocol.offer(1, stream, if (offeredAudio) audioStream else null)
+                else CastStreamingProtocol.offer(1, offeredVideos,
+                    if (offeredAudio) audioStream else null)
             channel.send(CastMessage(SENDER_ID, target.transportId,
                 CastStreamingProtocol.NAMESPACE, offer.toString()))
             val answer = withTimeoutOrNull(10_000) { answered.await() }
                 ?: error("receiver did not answer the streaming offer")
             val acceptedPort: Int
             val audioAccepted: Boolean
+            var initialBitrate = 0
             if (audioOnly) {
                 acceptedPort = CastStreamingProtocol.audioOnlyAnswer(answer, 1)
                 audioAccepted = true
             } else {
-                val accepted = CastStreamingProtocol.answer(answer, 1, if (offeredAudio) 1 else 0)
+                val offset = if (offeredAudio) 1 else 0
+                val accepted = CastStreamingProtocol.answer(answer, 1,
+                    offeredVideos.indices.map { it + offset }, if (offeredAudio) 0 else null)
                 acceptedPort = accepted.port
                 audioAccepted = accepted.audioAccepted
+                val offerProfile = offeredProfiles[accepted.videoIndex - offset]
+                val offeredVideo = offeredVideos[accepted.videoIndex - offset]
+                require((accepted.videoLimits?.minBitRate ?: 0) <= offeredVideo.bitRate) {
+                    "receiver minimum bitrate exceeds the selected video offer"
+                }
+                val profiles = CastVideoQuality.candidates(accepted.videoLimits) { candidate ->
+                    candidate.width <= offerProfile.width && candidate.height <= offerProfile.height &&
+                        candidate.fps <= offerProfile.fps &&
+                        VideoEncoder.avcEncoderFor(candidate.width, candidate.height, candidate.fps) != null
+                }
+                val profile = profiles.firstOrNull()
+                    ?: error("receiver and phone have no compatible H.264 capture profile")
+                activeProfile = profile
+                profileController = CastAdaptiveProfileController(profiles)
+                stream = offeredVideo.copy(width = profile.width, height = profile.height,
+                    fps = profile.fps, bitRate = minOf(profile.bitrate, offeredVideo.bitRate),
+                    targetDelayMs = minOf(CastStreamingProtocol.TARGET_DELAY_MS,
+                        accepted.videoLimits?.maxDelayMs ?: CastStreamingProtocol.TARGET_DELAY_MS),
+                    minBitRate = accepted.videoLimits?.minBitRate ?: 300_000)
+                initialBitrate = minOf(stream!!.bitRate, maxOf(3_000_000, profile.minBitrate))
+                logI("Native Cast: negotiated ${profile.width}x${profile.height}@${profile.fps}, " +
+                    "bitrate ${stream!!.bitRate}, receiver limits ${accepted.videoLimits}")
             }
             if (!audioAccepted) {
                 audioEncoder?.stop()
@@ -115,18 +149,26 @@ internal class NativeCastSession(private val context: Context, val device: CastD
             val mediaSender = CastStreamingSender(device.host, acceptedPort,
                 if (audioOnly) null else stream,
                 if (audioAccepted) audioStream else null,
+                initialBitrate = initialBitrate,
                 onPictureLoss = { encoder?.requestKeyFrame() },
-                onBitrateChange = { encoder?.setBitrate(it) },
+                onBitrateChange = { rate -> synchronized(qualityLock) {
+                    encoder?.setBitrate(minOf(rate, activeProfile?.bitrate ?: rate))
+                } },
                 onCapturePaused = { paused ->
                     runCatching {
-                        capture?.setPaused(paused)
-                        if (!paused) encoder?.requestKeyFrame()
+                        synchronized(qualityLock) {
+                            capture?.setPaused(paused)
+                            if (!paused) encoder?.requestKeyFrame()
+                        }
                     }.onFailure { fail("capture flow control failed: ${it.message}") }
                 },
                 onTransportFailure = ::fail)
             sender = mediaSender
             mediaSender.start()
-            if (!audioOnly) startCapture(mp)
+            if (!audioOnly) {
+                startCapture(mp, initialBitrate)
+                scope.launch { adaptCaptureQuality() }
+            }
             audioEncoder?.start(
                 onFrame = { data, ptsUs -> sender?.sendAudio(data, ptsUs) },
                 onFailure = ::fail)
@@ -186,10 +228,20 @@ internal class NativeCastSession(private val context: Context, val device: CastD
         return mp
     }
 
-    private fun startCapture(mp: MediaProjection) {
-        val video = VideoEncoder(stream.width, stream.height, stream.fps, stream.bitRate,
-            keyframeIntervalSec = 1)
+    private fun startCapture(mp: MediaProjection, initialBitrate: Int) {
+        val profile = activeProfile ?: error("capture profile was not selected")
+        val video = createVideoEncoder(profile, initialBitrate)
         encoder = video
+        capture = ScreenCapture(context).also {
+            it.start(mp, video.inputSurface, captureSize(profile))
+        }
+        logI("Native Cast: projection captured for Cast Streaming")
+    }
+
+    private fun createVideoEncoder(profile: CastVideoQuality.Profile, bitrate: Int): VideoEncoder {
+        val video = VideoEncoder(profile.width, profile.height, profile.fps, bitrate,
+            keyframeIntervalSec = 1,
+            codecName = VideoEncoder.avcEncoderFor(profile.width, profile.height, profile.fps))
         var codecSps: ByteArray? = null
         var codecPps: ByteArray? = null
         video.start(object : VideoEncoder.Sink {
@@ -201,10 +253,36 @@ internal class NativeCastSession(private val context: Context, val device: CastD
                 sender?.sendVideo(bytes, ptsUs, isKeyFrame)
             }
         })
-        capture = ScreenCapture(context).also {
-            it.start(mp, video.inputSurface, ScreenCapture.sizeFor(context, Resolution.P720))
+        return video
+    }
+
+    private fun captureSize(profile: CastVideoQuality.Profile) = ScreenCapture.Size(
+        profile.width, profile.height, context.resources.configuration.densityDpi)
+
+    private suspend fun adaptCaptureQuality() {
+        while (!stopped && !_state.value.startsWith("ERROR")) {
+            delay(1_000)
+            val mediaSender = sender ?: return
+            if (!mediaSender.acknowledged || mediaSender.videoCapturePaused) continue
+            val next = profileController?.update(System.nanoTime() / 1_000_000,
+                mediaSender.videoBitrate) ?: continue
+            runCatching {
+                synchronized(qualityLock) {
+                    val display = capture ?: error("capture stopped")
+                    display.setPaused(true)
+                    mediaSender.resetVideoForFormatChange()
+                    encoder?.stop()
+                    val video = createVideoEncoder(next,
+                        minOf(mediaSender.videoBitrate, next.bitrate))
+                    encoder = video
+                    display.replaceSurface(video.inputSurface, captureSize(next))
+                    activeProfile = next
+                    display.setPaused(false)
+                    video.requestKeyFrame()
+                    logI("Native Cast: adapted capture to ${next.width}x${next.height}@${next.fps}")
+                }
+            }.onFailure { fail("capture quality change failed: ${it.message}") }
         }
-        logI("Native Cast: projection captured for Cast Streaming")
     }
 
     private suspend fun collectMessages() {
@@ -274,8 +352,10 @@ internal class NativeCastSession(private val context: Context, val device: CastD
     @Synchronized private fun releaseMedia() {
         runCatching { audioEncoder?.stop() }; audioEncoder = null
         PhoneMediaVolume.restore(context, this)
-        runCatching { capture?.stop() }; capture = null
-        runCatching { encoder?.stop() }; encoder = null
+        synchronized(qualityLock) {
+            runCatching { capture?.stop() }; capture = null
+            runCatching { encoder?.stop() }; encoder = null
+        }
         runCatching { sender?.stop() }; sender = null
         runCatching { projection?.stop() }; projection = null
     }

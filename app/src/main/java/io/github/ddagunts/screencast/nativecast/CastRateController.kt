@@ -2,10 +2,12 @@ package io.github.ddagunts.screencast.nativecast
 
 internal class CastRateController(
     initialBitrate: Int,
-    private val minBitrate: Int = 750_000,
+    minBitrate: Int = 750_000,
     private val maxBitrate: Int = 6_000_000,
 ) {
-    var bitrate = initialBitrate
+    private val minBitrate = minOf(minBitrate, maxBitrate)
+    init { require(initialBitrate in this.minBitrate..maxBitrate) }
+    @Volatile var bitrate = initialBitrate
         private set
 
     private var lastChangeMs = 0L
@@ -31,10 +33,14 @@ internal class CastRateController(
 
     fun onPictureLoss(nowMs: Long): Int? = decrease(nowMs)
 
-    fun update(nowMs: Long, oldestInFlightMs: Long): Int? {
+    fun onBackpressure(nowMs: Long): Int? = decrease(nowMs)
+
+    fun update(nowMs: Long, oldestInFlightMs: Long, targetDelayMs: Int = 200): Int? {
         if (!receivedCheckpoint) return null
+        val delay = targetDelayMs.coerceIn(100, 1_000)
         val congested = pendingLosses >= 2 ||
-            (oldestInFlightMs > 600 && nowMs - lastProgressMs > 400)
+            (oldestInFlightMs > maxOf(300, delay * 2) &&
+                nowMs - lastProgressMs > maxOf(200, delay))
         pendingLosses = 0
         if (congested) return decrease(nowMs)
         if (nowMs - lastChangeMs < 3_000 || nowMs - lastCongestionMs < 3_000 ||

@@ -36,7 +36,8 @@ class NativeProjectionRequestActivity : ComponentActivity() {
         if (savedInstanceState == null) {
             val manager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             launcher.launch(manager.createCastCaptureIntent(
-                intent.hasExtra(StartPermissionActivity.EXTRA_MIRROR_ATTEMPT_ID) ||
+                intent.getBooleanExtra(StartPermissionActivity.EXTRA_WHOLE_SCREEN,
+                    intent.hasExtra(StartPermissionActivity.EXTRA_MIRROR_ATTEMPT_ID)) ||
                     intent.getBooleanExtra(NativeCastForegroundService.EXTRA_AUDIO_ONLY, false)))
         }
     }

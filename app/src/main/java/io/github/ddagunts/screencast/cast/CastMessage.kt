@@ -3,14 +3,16 @@ package io.github.ddagunts.screencast.cast
 import java.io.ByteArrayOutputStream
 
 // Hand-rolled protobuf codec for the Cast V2 envelope. Field numbers + wire types
-// mirror cast_channel.proto from the Cast SDK; we only implement the six fields
-// the device actually uses on the wire, which avoids pulling in protobuf-kotlin
+// mirror cast_channel.proto from the Cast SDK; the binary payload is needed
+// for the device authentication challenge and response.
+// This avoids pulling in protobuf-kotlin
 // (~1 MB APK cost) for a schema that hasn't changed since 2014.
 data class CastMessage(
     val sourceId: String,
     val destinationId: String,
     val namespace: String,
     val payloadUtf8: String,
+    val payloadBinary: ByteArray? = null,
 ) {
     fun encode(): ByteArray {
         val buf = ByteArrayOutputStream()
@@ -20,8 +22,9 @@ data class CastMessage(
         buf.writeString(3, destinationId)
         buf.writeString(4, namespace)
         buf.writeVarint(5 shl 3)          // field 5 payload_type, varint
-        buf.writeVarint(0)                 // STRING
-        buf.writeString(6, payloadUtf8)
+        buf.writeVarint(if (payloadBinary == null) 0 else 1)
+        if (payloadBinary == null) buf.writeString(6, payloadUtf8)
+        else buf.writeBytes(7, payloadBinary)
         return buf.toByteArray()
     }
 
@@ -29,6 +32,7 @@ data class CastMessage(
         fun decode(bytes: ByteArray): CastMessage {
             var offset = 0
             var sourceId = ""; var destinationId = ""; var namespace = ""; var payload = ""
+            var payloadType = 0; var binary: ByteArray? = null
             while (offset < bytes.size) {
                 val (tag, nextA) = readVarint(bytes, offset); offset = nextA
                 val field = (tag ushr 3).toInt()
@@ -37,18 +41,20 @@ data class CastMessage(
                 // the whole frame. A malformed frame from a hostile peer also has
                 // to land here — every branch bounds-checks before advancing.
                 when (wire) {
-                    0 -> { val (_, nextB) = readVarint(bytes, offset); offset = nextB }
+                    0 -> { val (value, nextB) = readVarint(bytes, offset); offset = nextB
+                        if (field == 5) payloadType = value.toInt() }
                     1 -> { require(offset + 8 <= bytes.size) { "fixed64 past end" }; offset += 8 }
                     5 -> { require(offset + 4 <= bytes.size) { "fixed32 past end" }; offset += 4 }
                     2 -> {
                         val (len, nextB) = readVarint(bytes, offset); offset = nextB
-                        require(len >= 0 && offset + len <= bytes.size) { "len-delimited past end ($len)" }
+                        require(len >= 0 && len <= bytes.size - offset) { "len-delimited past end ($len)" }
                         val value = String(bytes, offset, len.toInt(), Charsets.UTF_8)
                         when (field) {
                             2 -> sourceId = value
                             3 -> destinationId = value
                             4 -> namespace = value
                             6 -> payload = value
+                            7 -> binary = bytes.copyOfRange(offset, offset + len.toInt())
                         }
                         offset += len.toInt()
                     }
@@ -56,14 +62,20 @@ data class CastMessage(
                     else -> error("unknown wire type $wire at field $field")
                 }
             }
-            return CastMessage(sourceId, destinationId, namespace, payload)
+            require(payloadType == 0 || payloadType == 1) { "unknown Cast payload type" }
+            require(payloadType != 1 || binary != null) { "missing binary Cast payload" }
+            return CastMessage(sourceId, destinationId, namespace, payload,
+                if (payloadType == 1) binary else null)
         }
     }
 }
 
 private fun ByteArrayOutputStream.writeString(field: Int, s: String) {
+    writeBytes(field, s.toByteArray(Charsets.UTF_8))
+}
+
+private fun ByteArrayOutputStream.writeBytes(field: Int, b: ByteArray) {
     writeVarint((field shl 3) or 2)
-    val b = s.toByteArray(Charsets.UTF_8)
     writeVarint(b.size.toLong())
     write(b)
 }

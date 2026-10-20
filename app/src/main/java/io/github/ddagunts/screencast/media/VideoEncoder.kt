@@ -2,6 +2,7 @@ package io.github.ddagunts.screencast.media
 
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
+import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.os.Bundle
 import android.view.Surface
@@ -17,6 +18,7 @@ class VideoEncoder(
     private val fps: Int = 30,
     private val bitrate: Int = 3_000_000,
     private val keyframeIntervalSec: Int = 2,
+    private val codecName: String? = null,
 ) {
     interface Sink {
         fun onFormat(sps: ByteArray, pps: ByteArray)
@@ -39,17 +41,20 @@ class VideoEncoder(
             setInteger(MediaFormat.KEY_FRAME_RATE, fps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, keyframeIntervalSec)
             setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
-            setInteger(MediaFormat.KEY_LEVEL, when {
-                width * height >= 1920 * 1080 -> MediaCodecInfo.CodecProfileLevel.AVCLevel4
-                width * height >= 1280 * 720 -> MediaCodecInfo.CodecProfileLevel.AVCLevel31
-                else -> MediaCodecInfo.CodecProfileLevel.AVCLevel3
-            })
+            setInteger(MediaFormat.KEY_LEVEL, requiredAvcLevel(width, height, fps))
             setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 1_000_000L / fps)
         }
-        codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-        codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-        inputSurface = codec.createInputSurface()
-        codec.start()
+        codec = if (codecName == null) MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+            else MediaCodec.createByCodecName(codecName)
+        try {
+            codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            inputSurface = codec.createInputSurface()
+            codec.start()
+        } catch (e: Throwable) {
+            if (::inputSurface.isInitialized) runCatching { inputSurface.release() }
+            runCatching { codec.release() }
+            throw e
+        }
         running = true
         drainThread = thread(name = "video-encoder-drain", isDaemon = true) { drain() }
         syncThread = thread(name = "video-encoder-sync", isDaemon = true) { syncFrameLoop() }
@@ -171,5 +176,30 @@ class VideoEncoder(
             out.add(data.copyOfRange(begin, end))
         }
         return out
+    }
+
+    companion object {
+        private fun requiredAvcLevel(width: Int, height: Int, fps: Int): Int = when {
+            width * height >= 1920 * 1080 && fps > 30 -> MediaCodecInfo.CodecProfileLevel.AVCLevel42
+            width * height >= 1920 * 1080 -> MediaCodecInfo.CodecProfileLevel.AVCLevel4
+            width * height >= 1280 * 720 && fps > 30 -> MediaCodecInfo.CodecProfileLevel.AVCLevel32
+            width * height >= 1280 * 720 -> MediaCodecInfo.CodecProfileLevel.AVCLevel31
+            else -> MediaCodecInfo.CodecProfileLevel.AVCLevel3
+        }
+
+        fun avcEncoderFor(width: Int, height: Int, fps: Int): String? =
+            MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.firstOrNull { info ->
+                info.isEncoder && info.supportedTypes.any {
+                    it.equals(MediaFormat.MIMETYPE_VIDEO_AVC, ignoreCase = true)
+                } && runCatching {
+                    val capabilities = info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC)
+                    capabilities.videoCapabilities?.areSizeAndRateSupported(
+                        width, height, fps.toDouble()) == true &&
+                        capabilities.profileLevels.any { it.profile in setOf(
+                            MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline,
+                            MediaCodecInfo.CodecProfileLevel.AVCProfileConstrainedBaseline) &&
+                            it.level >= requiredAvcLevel(width, height, fps) }
+                }.getOrDefault(false)
+            }?.name
     }
 }

@@ -17,6 +17,7 @@ internal class CastStreamingSender(
     private val port: Int,
     video: CastStreamingProtocol.VideoStream?,
     audio: CastStreamingProtocol.AudioStream? = null,
+    initialBitrate: Int = video?.bitRate ?: 0,
     private val onBitrateChange: (Int) -> Unit = {},
     private val onCapturePaused: (Boolean) -> Unit = {},
     private val onTransportFailure: (String) -> Unit = {},
@@ -55,7 +56,10 @@ internal class CastStreamingSender(
     init { require(streams.isNotEmpty()) { "Cast Streaming needs an audio or video stream" } }
     private val socket = DatagramSocket().apply { soTimeout = 1 }
     private val peer = InetSocketAddress(InetAddress.getByName(host), port)
-    private val rateController = video?.let { CastRateController(it.bitRate) }
+    private val rateController = video?.let {
+        CastRateController(initialBitrate, minBitrate = it.minBitRate,
+            maxBitrate = it.bitRate)
+    }
     private val inFlightController = CastInFlightController()
     private var pacingBytes = 24_000.0
     private var pacingAtNs = System.nanoTime()
@@ -68,6 +72,15 @@ internal class CastStreamingSender(
     private var worker: Thread? = null
     val acknowledged: Boolean get() = (videoStream ?: audioStream)?.acknowledged == true
     val audioAcknowledged: Boolean get() = audioStream?.acknowledged == true
+    val videoBitrate: Int get() = rateController?.bitrate ?: 0
+    val videoCapturePaused: Boolean get() = capturePaused
+
+    fun resetVideoForFormatChange() {
+        videoStream?.let { stream -> synchronized(stream.queue) {
+            stream.queue.clear()
+            recoveringVideo = true
+        } }
+    }
 
     fun start() {
         worker = thread(name = "cast-streaming-udp", isDaemon = true) { run() }
@@ -133,6 +146,7 @@ internal class CastStreamingSender(
                         video.history.lastOrNull()?.ptsUs,
                         video.targetDelayMs)) {
                     CastInFlightController.Action.PAUSE -> {
+                        rateController?.onBackpressure(now)?.let(onBitrateChange)
                         synchronized(video.queue) {
                             capturePaused = true
                             recoveringVideo = true
@@ -159,7 +173,9 @@ internal class CastStreamingSender(
                 }
                 if (now - lastControlMs >= 500) {
                     val oldestAge = videoStream?.history?.firstOrNull()?.let { now - it.sentAtMs } ?: 0L
-                    rateController?.update(now, oldestAge)?.let(onBitrateChange)
+                    rateController?.update(now, oldestAge,
+                        videoStream?.targetDelayMs ?: CastStreamingProtocol.TARGET_DELAY_MS)
+                        ?.let(onBitrateChange)
                     lastControlMs = now
                 }
                 if (videoStream?.queue?.isEmpty() != false && audioStream?.queue?.isEmpty() != false) {
@@ -203,7 +219,8 @@ internal class CastStreamingSender(
         while (running) {
             val packet = DatagramPacket(buffer, buffer.size)
             try { socket.receive(packet) } catch (_: java.net.SocketTimeoutException) { return }
-            if (packet.address != peer.address || packet.length < 12) continue
+            if (packet.address != peer.address || packet.port != peer.port ||
+                packet.length < 12) continue
             for (stream in streams) {
                 val feedback = CastStreamingProtocol.feedback(
                     buffer.copyOf(packet.length), stream.ssrc, stream.checkpoint)

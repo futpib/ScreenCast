@@ -76,7 +76,9 @@ class MirrorIntentViewModel(app: Application) : AndroidViewModel(app) {
                     val casting = existing.third.startsWith("CASTING")
                     val failed = existing.third.startsWith("ERROR")
                     _state.value = MirrorIntentState(existing.second,
-                        if (casting) "Mirroring to ${existing.second.name}"
+                        if (casting && existing.first == Method.HLS)
+                            "Mirroring to ${existing.second.name} using video playback (about 5–10 s delay)"
+                        else if (casting) "Mirroring to ${existing.second.name}"
                         else if (failed) "The previous cast failed. Stop it before trying again."
                         else "Connecting to ${existing.second.name}…",
                         busy = true, casting = casting)
@@ -85,7 +87,7 @@ class MirrorIntentViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun start(device: CastDevice) {
+    fun start(device: CastDevice, wholeScreen: Boolean = true) {
         if (job?.isActive == true) return
         if (NativeCastForegroundService.sessionFlow.value != null ||
             WebRtcForegroundService.sessionFlow.value != null ||
@@ -107,11 +109,11 @@ class MirrorIntentViewModel(app: Application) : AndroidViewModel(app) {
                     _state.value = MirrorIntentState(
                         device = device,
                         message = if (index == 0) "Connecting to ${device.name}…"
-                            else "Trying another way to connect to ${device.name}…",
+                            else retryMessage(next, device.name),
                         busy = true,
                         retrying = index > 0,
                     )
-                    when (val result = attempt(next, device)) {
+                    when (val result = attempt(next, device, wholeScreen)) {
                         Result.Ended -> {
                             _state.value = MirrorIntentState()
                             return@launch
@@ -160,11 +162,11 @@ class MirrorIntentViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = MirrorIntentState()
     }
 
-    private suspend fun attempt(next: Method, device: CastDevice): Result {
+    private suspend fun attempt(next: Method, device: CastDevice, wholeScreen: Boolean): Result {
         val id = UUID.randomUUID().toString()
         attemptId = id
         MirrorAttemptRegistry.begin(id)
-        launch(next, device, id)
+        launch(next, device, id, wholeScreen)
         val consent = MirrorAttemptRegistry.consent.filterNotNull().first { it.id == id }
         if (!consent.granted) return Result.Declined
         val host = device.host
@@ -182,7 +184,9 @@ class MirrorIntentViewModel(app: Application) : AndroidViewModel(app) {
                 .first { it?.startsWith("CASTING") == true || it?.startsWith("ERROR") == true }
         } ?: return Result.Failed("Connection timed out")
         if (first.startsWith("ERROR")) return Result.Failed(errorFor(next, host))
-        _state.value = MirrorIntentState(device, "Mirroring to ${device.name}", busy = true, casting = true)
+        _state.value = MirrorIntentState(device,
+            if (next == Method.HLS) "Mirroring to ${device.name} using video playback (about 5–10 s delay)"
+                else "Mirroring to ${device.name}", busy = true, casting = true)
         val terminal = status.first { it == null || it.startsWith("ERROR") }
         return if (terminal == null) Result.Ended else Result.Failed(errorFor(next, host))
     }
@@ -190,9 +194,13 @@ class MirrorIntentViewModel(app: Application) : AndroidViewModel(app) {
     private fun updateStatus(status: String?, device: CastDevice) {
         if (status == null || status.startsWith("ERROR") || status.startsWith("CASTING")) return
         _state.value = _state.value.copy(device = device,
-            message = if (_state.value.retrying) "Trying another way to connect to ${device.name}…"
+            message = if (_state.value.retrying) retryMessage(method, device.name)
                 else "Connecting to ${device.name}…")
     }
+
+    private fun retryMessage(next: Method?, name: String): String =
+        if (next == Method.HLS) "Trying video playback on $name (about 5–10 s delay). Approve screen sharing again."
+        else "Trying another way to connect to $name. Approve screen sharing again."
 
     private fun errorFor(next: Method, host: String): String = when (next) {
         Method.NATIVE -> NativeCastForegroundService.sessionFlow.value?.status
@@ -203,11 +211,12 @@ class MirrorIntentViewModel(app: Application) : AndroidViewModel(app) {
             ?: "Video connection failed"
     }
 
-    private fun launch(next: Method, device: CastDevice, id: String) {
+    private fun launch(next: Method, device: CastDevice, id: String, wholeScreen: Boolean) {
         val app = getApplication<Application>()
         val intent = Intent(app, StartPermissionActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             putExtra(StartPermissionActivity.EXTRA_MIRROR_ATTEMPT_ID, id)
+            putExtra(StartPermissionActivity.EXTRA_WHOLE_SCREEN, wholeScreen)
             putExtra(StartPermissionActivity.EXTRA_REQUEST_AUDIO, next != Method.WEBRTC ||
                 WebRtcConfigStore(app).audioEnabled)
         }

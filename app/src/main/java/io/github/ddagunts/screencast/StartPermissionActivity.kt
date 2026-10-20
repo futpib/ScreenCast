@@ -74,6 +74,7 @@ class StartPermissionActivity : ComponentActivity() {
         const val EXTRA_DESTINATION = "start_destination"
         const val EXTRA_REQUEST_AUDIO = "request_audio"
         const val EXTRA_MIRROR_ATTEMPT_ID = "mirror_attempt_id"
+        const val EXTRA_WHOLE_SCREEN = "mirror_whole_screen"
         const val DESTINATION_HLS = "hls"
         const val DESTINATION_NATIVE = "native"
         const val DESTINATION_WEBRTC = "webrtc"
