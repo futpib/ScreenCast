@@ -5,12 +5,14 @@ An open-source Android app that casts the phone's screen to one or more Chromeca
 ## Screenshots
 
 <p>
-  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/01-cast-idle.png" width="240" alt="Home screen with mirroring, media playback, and TV remote choices" />
-  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/02-settings.png" width="240" alt="Settings: resolution, segment duration, playlist window, live-edge target" />
-  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/02-settings-2.png" width="240" alt="Settings continued: sync alignment + audio capture options" />
-  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/03-webrtc-idle.png" width="240" alt="WebRTC mode — low-latency screen mirroring via a custom Cast receiver" />
-  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/04-remote-picker.png" width="240" alt="Remote mode — paired and discovered Android TV / Google TV devices" />
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/01-home.png" width="240" alt="Home screen with screen mirroring, phone audio, media playback, TV remote, and multi-TV choices" />
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/02-mirror-screen.png" width="240" alt="Mirror screen: choose a TV or connect by IP" />
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/03-cast-phone-audio.png" width="240" alt="Cast phone audio to a Cast speaker or TV" />
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/04-play-media.png" width="240" alt="Play a photo, video, audio file, or direct media URL on a TV" />
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/05-advanced-settings.png" width="240" alt="Advanced settings for resolution, HLS buffering, and multi-TV synchronization" />
 </p>
+
+Captured on an Android 15 emulator with no TV on its network.
 
 ## Choose what you want to do
 
