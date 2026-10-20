@@ -24,7 +24,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @Composable
-fun NativeCastBody(nativeVm: NativeCastViewModel, devicesVm: WebRtcViewModel) {
+fun NativeCastBody(nativeVm: NativeCastViewModel, devicesVm: WebRtcViewModel,
+                   audioOnly: Boolean = false) {
     val devices by devicesVm.discovered.collectAsStateWithLifecycle()
     val manualHosts by devicesVm.manualHosts.collectAsStateWithLifecycle()
     val session by nativeVm.session.collectAsStateWithLifecycle()
@@ -32,8 +33,11 @@ fun NativeCastBody(nativeVm: NativeCastViewModel, devicesVm: WebRtcViewModel) {
         .padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Native Cast mirroring", style = MaterialTheme.typography.titleMedium)
-                Text("Streams screen video and capturable media or game audio directly to a stock Cast receiver over UDP.",
+                Text(if (audioOnly) "Cast phone audio" else "Native Cast mirroring",
+                    style = MaterialTheme.typography.titleMedium)
+                Text(if (audioOnly)
+                    "Streams capturable media or game audio to a Cast speaker or TV. Android asks for capture access, but no screen video is sent."
+                    else "Streams screen video and capturable media or game audio directly to a stock Cast receiver over UDP.",
                     style = MaterialTheme.typography.bodySmall)
                 session?.let { current ->
                     Text("${current.device.name}: ${current.status}")
@@ -41,10 +45,13 @@ fun NativeCastBody(nativeVm: NativeCastViewModel, devicesVm: WebRtcViewModel) {
                 }
             }
         }
-        Text("Available Chromecasts", style = MaterialTheme.typography.titleSmall)
+        Text(if (audioOnly) "Available Cast speakers and TVs" else "Available Chromecasts",
+            style = MaterialTheme.typography.titleSmall)
         if (devices.isEmpty()) Text("Discovering on LAN…")
         for (device in devices) {
-            Card(Modifier.fillMaxWidth().clickable(enabled = session == null) { nativeVm.start(device) }) {
+            Card(Modifier.fillMaxWidth().clickable(enabled = session == null) {
+                nativeVm.start(device, audioOnly)
+            }) {
                 Row(Modifier.padding(16.dp)) {
                     Column(Modifier.weight(1f)) {
                         Text(device.name)

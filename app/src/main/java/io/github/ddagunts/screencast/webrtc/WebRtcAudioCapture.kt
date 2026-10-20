@@ -40,6 +40,7 @@ import java.util.concurrent.ArrayBlockingQueue
 class WebRtcAudioCapture : JavaAudioDeviceModule.AudioBufferCallback {
 
     @Volatile private var audioRecord: AudioRecord? = null
+    val hasPlaybackCapture: Boolean get() = audioRecord != null
 
     // 10 ms PCM chunk size = 1920 B at 48 kHz / stereo / 16-bit.
     private val chunkBytes = WEBRTC_AUDIO_SAMPLE_RATE / 100 * WEBRTC_AUDIO_CHANNELS * 2

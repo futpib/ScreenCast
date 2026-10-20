@@ -10,7 +10,7 @@ import io.github.ddagunts.screencast.cast.CastDevice
 class NativeCastViewModel(app: Application) : AndroidViewModel(app) {
     val session = NativeCastForegroundService.sessionFlow
 
-    fun start(device: CastDevice) {
+    fun start(device: CastDevice, audioOnly: Boolean = false) {
         if (session.value != null) return
         val ctx = getApplication<Application>()
         ctx.startActivity(Intent(ctx, StartPermissionActivity::class.java).apply {
@@ -18,6 +18,7 @@ class NativeCastViewModel(app: Application) : AndroidViewModel(app) {
             putExtra(StartPermissionActivity.EXTRA_DESTINATION,
                 StartPermissionActivity.DESTINATION_NATIVE)
             putExtra(StartPermissionActivity.EXTRA_REQUEST_AUDIO, true)
+            putExtra(NativeCastForegroundService.EXTRA_AUDIO_ONLY, audioOnly)
             putExtra(NativeCastForegroundService.EXTRA_DEVICE_NAME, device.name)
             putExtra(NativeCastForegroundService.EXTRA_DEVICE_HOST, device.host)
             putExtra(NativeCastForegroundService.EXTRA_DEVICE_PORT, device.port)

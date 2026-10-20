@@ -128,6 +128,32 @@ class CastStreamingSenderTest {
         }
     }
 
+    @Test fun audioOnlySendsRtpAndAcceptsAudioFeedback() {
+        DatagramSocket(0, InetAddress.getLoopbackAddress()).use { receiver ->
+            receiver.soTimeout = 3_000
+            val audio = CastStreamingProtocol.AudioStream(
+                0x55667788, ByteArray(16), ByteArray(16))
+            val sender = CastStreamingSender("127.0.0.1", receiver.localPort, null, audio) {}
+            try {
+                sender.start()
+                sender.sendVideo(byteArrayOf(1), 1_000_000, true)
+                sender.sendAudio(byteArrayOf(1, 2, 3), 1_000_000)
+                val report = DatagramPacket(ByteArray(1500), 1500)
+                receiver.receive(report)
+                assertEquals(200, report.data[1].toInt() and 0xff)
+                assertEquals(audio.ssrc, readInt(report.data, 4))
+                val packet = DatagramPacket(ByteArray(1500), 1500)
+                receiver.receive(packet)
+                assertEquals(127, packet.data[1].toInt() and 0x7f)
+                assertEquals(audio.ssrc, readInt(packet.data, 8))
+                sendCheckpoint(receiver, packet, audio.ssrc, 0)
+                assertTrue(waitUntil(1_000) { sender.acknowledged })
+            } finally {
+                sender.stop()
+            }
+        }
+    }
+
     @Test fun audioPacketsAreInterleavedWithLargeVideoFrames() {
         DatagramSocket(0, InetAddress.getLoopbackAddress()).use { receiver ->
             receiver.soTimeout = 3_000

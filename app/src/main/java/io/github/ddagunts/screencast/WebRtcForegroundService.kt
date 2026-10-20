@@ -13,6 +13,7 @@ import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import io.github.ddagunts.screencast.cast.CastDevice
+import io.github.ddagunts.screencast.media.PhoneMediaVolume
 import io.github.ddagunts.screencast.util.logE
 import io.github.ddagunts.screencast.util.logI
 import io.github.ddagunts.screencast.util.logW
@@ -44,6 +45,7 @@ class WebRtcForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        PhoneMediaVolume.restoreStale(this)
         createChannel()
     }
 
@@ -126,6 +128,11 @@ class WebRtcForegroundService : Service() {
                         is WebRtcState.Casting -> SessionSnapshot(device, "CASTING", volume = currentVol)
                         is WebRtcState.Error -> SessionSnapshot(device, "ERROR", st.message, volume = currentVol)
                     }
+                    if (st is WebRtcState.Casting && s.hasPlaybackCapture) {
+                        PhoneMediaVolume.silence(this@WebRtcForegroundService, this@WebRtcForegroundService)
+                    } else {
+                        PhoneMediaVolume.restore(this@WebRtcForegroundService, this@WebRtcForegroundService)
+                    }
                     refreshNotification()
                     if (st is WebRtcState.Idle || st is WebRtcState.Error) {
                         // Error state is terminal here — the session can't
@@ -162,6 +169,7 @@ class WebRtcForegroundService : Service() {
         sessionJob?.cancel()
         sessionJob = null
         runCatching { session?.stop() }.onFailure { logW("stopCast: $it") }
+        PhoneMediaVolume.restore(this, this)
         session = null
         _session.value = null
         releaseWakeLock()

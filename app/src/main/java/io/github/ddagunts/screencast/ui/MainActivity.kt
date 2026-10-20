@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.ddagunts.screencast.CastMode
+import io.github.ddagunts.screencast.media.PhoneMediaVolume
 
 class MainActivity : ComponentActivity() {
 
@@ -64,6 +65,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        PhoneMediaVolume.restoreStale(this)
         setContent {
             ScreenCastTheme {
                 Surface(Modifier.fillMaxSize()) { AppScaffold(vm, webRtcVm, atvVm, nativeVm, mediaVm, mirrorVm) }
@@ -100,7 +102,7 @@ private fun ScreenCastTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = colors, content = content)
 }
 
-private enum class Screen { Home, Mirror, MultiMirror, Media, Remote, Advanced, Settings, Logs }
+private enum class Screen { Home, Mirror, Audio, MultiMirror, Media, Remote, Advanced, Settings, Logs }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -121,6 +123,7 @@ private fun AppScaffold(
                 Text(when (screen) {
                     Screen.Home -> "ScreenCast"
                     Screen.Mirror -> "Mirror screen"
+                    Screen.Audio -> "Cast phone audio"
                     Screen.MultiMirror -> "Mirror to several TVs"
                     Screen.Media -> "Play media"
                     Screen.Remote -> "TV remote"
@@ -149,11 +152,13 @@ private fun AppScaffold(
             when (screen) {
                 Screen.Home -> IntentHomeScreen(
                     onMirror = { screen = Screen.Mirror },
+                    onAudio = { screen = Screen.Audio },
                     onMultiMirror = { screen = Screen.MultiMirror },
                     onMedia = { screen = Screen.Media },
                     onRemote = { screen = Screen.Remote },
                 )
                 Screen.Mirror -> MirrorIntentScreen(mirrorVm, webRtcVm)
+                Screen.Audio -> NativeCastBody(nativeVm, webRtcVm, audioOnly = true)
                 Screen.MultiMirror -> CastControlScreen(vm)
                 Screen.Media -> MediaPushScreen(mediaVm, vm)
                 Screen.Remote -> AndroidTvRemoteScreen(atvVm)
@@ -176,12 +181,14 @@ private fun AppScaffold(
 @Composable
 private fun IntentHomeScreen(
     onMirror: () -> Unit,
+    onAudio: () -> Unit,
     onMultiMirror: () -> Unit,
     onMedia: () -> Unit,
     onRemote: () -> Unit,
 ) {
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         IntentCard("Mirror my screen", "Show this phone on one TV.", onMirror)
+        IntentCard("Cast phone audio", "Play capturable phone audio on a Cast speaker or TV.", onAudio)
         IntentCard("Play a file or link", "Send a photo, video, or audio file to a TV.", onMedia)
         IntentCard("Control my TV", "Use your phone as an Android TV remote.", onRemote)
         IntentCard("Mirror to several TVs", "Show the same screen on multiple TVs.", onMultiMirror)

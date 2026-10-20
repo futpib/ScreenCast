@@ -19,6 +19,7 @@ import io.github.ddagunts.screencast.cast.pingMsg
 import io.github.ddagunts.screencast.cast.pongMsg
 import io.github.ddagunts.screencast.media.Resolution
 import io.github.ddagunts.screencast.media.ScreenCapture
+import io.github.ddagunts.screencast.media.PhoneMediaVolume
 import io.github.ddagunts.screencast.media.VideoEncoder
 import io.github.ddagunts.screencast.util.NetworkUtils
 import io.github.ddagunts.screencast.util.logI
@@ -37,7 +38,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 
-internal class NativeCastSession(private val context: Context, val device: CastDevice) {
+internal class NativeCastSession(private val context: Context, val device: CastDevice,
+                                 private val audioOnly: Boolean = false) {
     private data class App(val sessionId: String, val transportId: String)
 
     private val scope = CoroutineScope(Dispatchers.IO + Job())
@@ -72,12 +74,14 @@ internal class NativeCastSession(private val context: Context, val device: CastD
             _state.value = "LAUNCHING"
             // Android mirroring is the stock Android sender target. The Chrome
             // mirroring receiver is another stock Cast Streaming target.
-            for (id in listOf(CastStreamingProtocol.ANDROID_MIRRORING_APP,
-                    CastStreamingProtocol.MIRRORING_APP)) {
+            val appIds = if (audioOnly) listOf(CastStreamingProtocol.AUDIO_MIRRORING_APP)
+                else listOf(CastStreamingProtocol.ANDROID_MIRRORING_APP,
+                    CastStreamingProtocol.MIRRORING_APP)
+            for (id in appIds) {
                 activeAppId = id
                 channel.send(launchMsg(id).first)
                 if (withTimeoutOrNull(6_000) { launched.await() } != null) break
-                if (id == CastStreamingProtocol.MIRRORING_APP) error("mirroring receiver did not launch")
+                if (id == appIds.last()) error("Cast Streaming receiver did not launch")
                 logW("Android mirroring receiver unavailable; trying default mirroring receiver")
             }
             val target = launched.await()
@@ -86,20 +90,31 @@ internal class NativeCastSession(private val context: Context, val device: CastD
             _state.value = "NEGOTIATING"
             val mp = createProjection(resultCode, projectionData, onProjectionStopped)
             audioEncoder = OpusPlaybackEncoder.prepare(context, mp)
+            if (audioOnly && audioEncoder == null) error("playback audio capture is unavailable")
             val offeredAudio = audioEncoder != null
-            val offer = CastStreamingProtocol.offer(1, stream,
-                if (offeredAudio) audioStream else null)
+            val offer = if (audioOnly) CastStreamingProtocol.audioOnlyOffer(1, audioStream)
+                else CastStreamingProtocol.offer(1, stream, if (offeredAudio) audioStream else null)
             channel.send(CastMessage(SENDER_ID, target.transportId,
                 CastStreamingProtocol.NAMESPACE, offer.toString()))
             val answer = withTimeoutOrNull(10_000) { answered.await() }
                 ?: error("receiver did not answer the streaming offer")
-            val accepted = CastStreamingProtocol.answer(answer, 1, if (offeredAudio) 1 else 0)
-            if (!accepted.audioAccepted) {
+            val acceptedPort: Int
+            val audioAccepted: Boolean
+            if (audioOnly) {
+                acceptedPort = CastStreamingProtocol.audioOnlyAnswer(answer, 1)
+                audioAccepted = true
+            } else {
+                val accepted = CastStreamingProtocol.answer(answer, 1, if (offeredAudio) 1 else 0)
+                acceptedPort = accepted.port
+                audioAccepted = accepted.audioAccepted
+            }
+            if (!audioAccepted) {
                 audioEncoder?.stop()
                 audioEncoder = null
             }
-            val mediaSender = CastStreamingSender(device.host, accepted.port, stream,
-                if (accepted.audioAccepted) audioStream else null,
+            val mediaSender = CastStreamingSender(device.host, acceptedPort,
+                if (audioOnly) null else stream,
+                if (audioAccepted) audioStream else null,
                 onPictureLoss = { encoder?.requestKeyFrame() },
                 onBitrateChange = { encoder?.setBitrate(it) },
                 onCapturePaused = { paused ->
@@ -111,7 +126,7 @@ internal class NativeCastSession(private val context: Context, val device: CastD
                 onTransportFailure = ::fail)
             sender = mediaSender
             mediaSender.start()
-            startCapture(mp)
+            if (!audioOnly) startCapture(mp)
             audioEncoder?.start(
                 onFrame = { data, ptsUs -> sender?.sendAudio(data, ptsUs) },
                 onFailure = ::fail)
@@ -120,12 +135,25 @@ internal class NativeCastSession(private val context: Context, val device: CastD
                 repeat(100) {
                     if (stopped || _state.value.startsWith("ERROR")) return@launch
                     if (sender?.acknowledged == true) {
-                        _state.value = if (audioEncoder != null) "CASTING (video + audio)" else "CASTING (video only)"
+                        _state.value = if (audioOnly) "CASTING (audio only)"
+                            else "CASTING (video only)"
+                        if (audioEncoder != null) scope.launch audioAcknowledgement@{
+                            repeat(100) {
+                                if (stopped || _state.value.startsWith("ERROR")) return@audioAcknowledgement
+                                if (sender?.audioAcknowledged == true) {
+                                    PhoneMediaVolume.silence(context, this@NativeCastSession)
+                                    _state.value = if (audioOnly) "CASTING (audio only)"
+                                        else "CASTING (video + audio)"
+                                    return@audioAcknowledgement
+                                }
+                                delay(100)
+                            }
+                        }
                         return@launch
                     }
                     delay(100)
                 }
-                fail("receiver did not acknowledge video")
+                fail("receiver did not acknowledge ${if (audioOnly) "audio" else "video"}")
                 logW("Cast Streaming: no RTCP acknowledgement after 10 seconds")
             }
         } catch (e: CancellationException) {
@@ -245,6 +273,7 @@ internal class NativeCastSession(private val context: Context, val device: CastD
 
     @Synchronized private fun releaseMedia() {
         runCatching { audioEncoder?.stop() }; audioEncoder = null
+        PhoneMediaVolume.restore(context, this)
         runCatching { capture?.stop() }; capture = null
         runCatching { encoder?.stop() }; encoder = null
         runCatching { sender?.stop() }; sender = null

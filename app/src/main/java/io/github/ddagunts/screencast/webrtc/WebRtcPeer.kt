@@ -52,6 +52,7 @@ class WebRtcPeer(
     private var surfaceTextureHelper: SurfaceTextureHelper? = null
     private var audioModule: JavaAudioDeviceModule? = null
     private var audioCapture: WebRtcAudioCapture? = null
+    val hasPlaybackCapture: Boolean get() = audioCapture?.hasPlaybackCapture == true
     private var audioSource: AudioSource? = null
     private var audioTrack: AudioTrack? = null
 

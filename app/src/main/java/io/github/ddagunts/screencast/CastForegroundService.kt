@@ -24,6 +24,7 @@ import io.github.ddagunts.screencast.media.HlsSegmenter
 import io.github.ddagunts.screencast.media.HttpStreamServer
 import io.github.ddagunts.screencast.media.Resolution
 import io.github.ddagunts.screencast.media.ScreenCapture
+import io.github.ddagunts.screencast.media.PhoneMediaVolume
 import io.github.ddagunts.screencast.media.StreamConfig
 import io.github.ddagunts.screencast.media.VideoEncoder
 import io.github.ddagunts.screencast.util.NetworkUtils
@@ -78,6 +79,7 @@ class CastForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        PhoneMediaVolume.restoreStale(this)
         createChannel()
     }
 
@@ -443,6 +445,7 @@ class CastForegroundService : Service() {
                         is CastState.Casting -> current.copy(castState = "CASTING", errorMessage = null)
                         is CastState.Error -> current.copy(castState = "ERROR", errorMessage = cs.message)
                     })
+                    updatePhoneMedia()
                     refreshNotification()
                 }
             }
@@ -554,6 +557,7 @@ class CastForegroundService : Service() {
             volume = CastVolume(),
             errorMessage = message,
         ))
+        updatePhoneMedia()
     }
 
     private fun stopDevice(host: String) {
@@ -569,6 +573,7 @@ class CastForegroundService : Service() {
         if (sessions.isEmpty()) {
             teardownPipeline()
         } else {
+            updatePhoneMedia()
             refreshNotification()
         }
         stopSelfIfEmpty()
@@ -591,6 +596,7 @@ class CastForegroundService : Service() {
         runCatching { capture?.stop() }.onFailure { logW("teardown capture: $it") }
         runCatching { encoder?.stop() }.onFailure { logW("teardown encoder: $it") }
         runCatching { audioEncoder?.stop() }.onFailure { logW("teardown audioEncoder: $it") }
+        PhoneMediaVolume.restore(this, this)
         runCatching { server?.stop() }.onFailure { logW("teardown server: $it") }
         runCatching { projection?.stop() }.onFailure { logW("teardown projection: $it") }
         releaseWakeLock()
@@ -598,6 +604,15 @@ class CastForegroundService : Service() {
         server = null; segmenter = null; projection = null
         pipelineUrl = null
         logW("pipeline torn down")
+    }
+
+    private fun updatePhoneMedia() {
+        if (audioEncoder?.hasPlaybackCapture == true &&
+            _devices.value.values.any { it.castState == "CASTING" }) {
+            PhoneMediaVolume.silence(this, this)
+        } else {
+            PhoneMediaVolume.restore(this, this)
+        }
     }
 
     // Don't tear down the service while the UI still shows cast entries —

@@ -16,6 +16,7 @@ internal object CastStreamingProtocol {
     const val NAMESPACE = "urn:x-cast:com.google.cast.webrtc"
     const val ANDROID_MIRRORING_APP = "674A0243"
     const val MIRRORING_APP = "0F5096E8"
+    const val AUDIO_MIRRORING_APP = "85CDB22F"
     const val VIDEO_PAYLOAD_TYPE = 96
     const val AUDIO_PAYLOAD_TYPE = 127
     const val AUDIO_SAMPLE_RATE = 48_000
@@ -61,20 +62,7 @@ internal object CastStreamingProtocol {
 
     fun offer(seqNum: Int, stream: VideoStream, audio: AudioStream? = null): JSONObject {
         val streams = JSONArray()
-        if (audio != null) streams.put(JSONObject()
-            .put("index", 0)
-            .put("type", "audio_source")
-            .put("codecName", "opus")
-            .put("rtpProfile", "cast")
-            .put("rtpPayloadType", AUDIO_PAYLOAD_TYPE)
-            .put("ssrc", audio.ssrc.toLong() and 0xffffffffL)
-            .put("targetDelay", TARGET_DELAY_MS)
-            .put("aesKey", audio.key.toHex())
-            .put("aesIvMask", audio.ivMask.toHex())
-            .put("timeBase", "1/$AUDIO_SAMPLE_RATE")
-            .put("channels", 2)
-            .put("bitRate", 128_000)
-            .put("receiverRtcpEventLog", false))
+        if (audio != null) streams.put(audioOfferStream(audio))
         streams.put(JSONObject()
                 .put("index", if (audio == null) 0 else 1)
                 .put("type", "video_source")
@@ -97,17 +85,54 @@ internal object CastStreamingProtocol {
                 .put("resolutions", JSONArray().put(JSONObject()
                     .put("width", stream.width).put("height", stream.height)))
                 .put("receiverRtcpEventLog", false))
-        return JSONObject()
+        return offerMessage(seqNum, streams)
+    }
+
+    fun audioOnlyOffer(seqNum: Int, audio: AudioStream): JSONObject =
+        offerMessage(seqNum, JSONArray().put(audioOfferStream(audio)))
+
+    private fun audioOfferStream(audio: AudioStream): JSONObject = JSONObject()
+            .put("index", 0)
+            .put("type", "audio_source")
+            .put("codecName", "opus")
+            .put("rtpProfile", "cast")
+            .put("rtpPayloadType", AUDIO_PAYLOAD_TYPE)
+            .put("ssrc", audio.ssrc.toLong() and 0xffffffffL)
+            .put("targetDelay", TARGET_DELAY_MS)
+            .put("aesKey", audio.key.toHex())
+            .put("aesIvMask", audio.ivMask.toHex())
+            .put("timeBase", "1/$AUDIO_SAMPLE_RATE")
+            .put("channels", 2)
+            .put("bitRate", 128_000)
+            .put("receiverRtcpEventLog", false)
+
+    private fun offerMessage(seqNum: Int, streams: JSONArray): JSONObject = JSONObject()
         .put("type", "OFFER")
         .put("seqNum", seqNum)
         .put("offer", JSONObject()
             .put("castMode", "mirroring")
             .put("supportedStreams", streams))
-    }
 
     data class Answer(val port: Int, val audioAccepted: Boolean)
 
     fun answer(message: JSONObject, expectedSeq: Int, videoIndex: Int): Answer {
+        val (answer, indexes) = parseAnswer(message, expectedSeq)
+        require((0 until indexes.length()).any { indexes.optInt(it, -1) == videoIndex }) {
+            "receiver did not accept H.264 video"
+        }
+        return Answer(answer.getInt("udpPort"), videoIndex == 1 &&
+            (0 until indexes.length()).any { indexes.optInt(it, -1) == 0 })
+    }
+
+    fun audioOnlyAnswer(message: JSONObject, expectedSeq: Int): Int {
+        val (answer, indexes) = parseAnswer(message, expectedSeq)
+        require((0 until indexes.length()).any { indexes.optInt(it, -1) == 0 }) {
+            "receiver did not accept Opus audio"
+        }
+        return answer.getInt("udpPort")
+    }
+
+    private fun parseAnswer(message: JSONObject, expectedSeq: Int): Pair<JSONObject, JSONArray> {
         require(message.optString("type") == "ANSWER" && message.optInt("seqNum", -1) == expectedSeq) {
             "unexpected Cast Streaming answer"
         }
@@ -116,13 +141,9 @@ internal object CastStreamingProtocol {
         }
         val answer = message.getJSONObject("answer")
         val indexes = answer.getJSONArray("sendIndexes")
-        require((0 until indexes.length()).any { indexes.optInt(it, -1) == videoIndex }) {
-            "receiver did not accept H.264 video"
-        }
         val port = answer.getInt("udpPort")
         require(port in 1..65535) { "invalid receiver UDP port" }
-        return Answer(port, videoIndex == 1 &&
-            (0 until indexes.length()).any { indexes.optInt(it, -1) == 0 })
+        return answer to indexes
     }
 
     fun annexB(nals: List<ByteArray>, sps: ByteArray?, pps: ByteArray?, keyFrame: Boolean): ByteArray {

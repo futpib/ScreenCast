@@ -33,7 +33,8 @@ class AudioEncoder(
     private lateinit var codec: MediaCodec
     @Volatile private var running = false
     private var sink: Sink? = null
-    private var audioRecord: AudioRecord? = null
+    @Volatile private var audioRecord: AudioRecord? = null
+    val hasPlaybackCapture: Boolean get() = audioRecord != null
     private val samplesPerFrame = 1024   // AAC-LC canonical
     private val frameDurationUs: Long = 1_000_000L * samplesPerFrame / sampleRate
     private val frameBytes = samplesPerFrame * channelCount * 2
@@ -50,7 +51,17 @@ class AudioEncoder(
         codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         codec.start()
         setupPlaybackCapture(projection)
-        audioRecord?.startRecording()
+        audioRecord?.let { record ->
+            val started = runCatching {
+                record.startRecording()
+                record.recordingState == AudioRecord.RECORDSTATE_RECORDING
+            }.getOrDefault(false)
+            if (!started) {
+                logW("audio: playback capture did not start — streaming silence")
+                runCatching { record.release() }
+                audioRecord = null
+            }
+        }
         running = true
         thread(name = "audio-encoder", isDaemon = true) { pump() }
         logI("audio encoder started ${sampleRate}Hz ch=${channelCount} capture=${audioRecord != null}")

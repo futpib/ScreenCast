@@ -15,7 +15,7 @@ import kotlin.concurrent.thread
 internal class CastStreamingSender(
     private val host: String,
     private val port: Int,
-    video: CastStreamingProtocol.VideoStream,
+    video: CastStreamingProtocol.VideoStream?,
     audio: CastStreamingProtocol.AudioStream? = null,
     private val onBitrateChange: (Int) -> Unit = {},
     private val onCapturePaused: (Boolean) -> Unit = {},
@@ -45,14 +45,17 @@ internal class CastStreamingSender(
         @Volatile var acknowledged = false
     }
 
-    private val videoStream = Stream(video.ssrc, CastStreamingProtocol.Packetizer(video), 90_000, 8)
+    private val videoStream = video?.let {
+        Stream(it.ssrc, CastStreamingProtocol.Packetizer(it), 90_000, 8)
+    }
     private val audioStream = audio?.let {
         Stream(it.ssrc, CastStreamingProtocol.Packetizer(it), CastStreamingProtocol.AUDIO_SAMPLE_RATE, 16)
     }
     private val streams = listOfNotNull(videoStream, audioStream)
+    init { require(streams.isNotEmpty()) { "Cast Streaming needs an audio or video stream" } }
     private val socket = DatagramSocket().apply { soTimeout = 1 }
     private val peer = InetSocketAddress(InetAddress.getByName(host), port)
-    private val rateController = CastRateController(video.bitRate)
+    private val rateController = video?.let { CastRateController(it.bitRate) }
     private val inFlightController = CastInFlightController()
     private var pacingBytes = 24_000.0
     private var pacingAtNs = System.nanoTime()
@@ -63,24 +66,26 @@ internal class CastStreamingSender(
     @Volatile private var videoQueueOverrun = false
     @Volatile private var running = true
     private var worker: Thread? = null
-    val acknowledged: Boolean get() = videoStream.acknowledged
+    val acknowledged: Boolean get() = (videoStream ?: audioStream)?.acknowledged == true
+    val audioAcknowledged: Boolean get() = audioStream?.acknowledged == true
 
     fun start() {
         worker = thread(name = "cast-streaming-udp", isDaemon = true) { run() }
     }
 
     fun sendVideo(data: ByteArray, ptsUs: Long, keyFrame: Boolean) {
+        val stream = videoStream ?: return
         if (!running || data.isEmpty()) return
-        synchronized(videoStream.queue) {
+        synchronized(stream.queue) {
             if (capturePaused) return
             if (recoveringVideo && !keyFrame) return
             if (recoveringVideo && keyFrame) {
-                videoStream.queue.clear()
+                stream.queue.clear()
                 recoveringVideo = false
             }
-            if (!videoStream.queue.offer(Frame(data, ptsUs, keyFrame))) {
-                videoStream.queue.clear()
-                if (keyFrame) videoStream.queue.offer(Frame(data, ptsUs, true))
+            if (!stream.queue.offer(Frame(data, ptsUs, keyFrame))) {
+                stream.queue.clear()
+                if (keyFrame) stream.queue.offer(Frame(data, ptsUs, true))
                 else {
                     recoveringVideo = true
                     videoQueueOverrun = true
@@ -116,27 +121,27 @@ internal class CastStreamingSender(
             try {
                 if (videoQueueOverrun) {
                     videoQueueOverrun = false
-                    rateController.onPictureLoss(System.nanoTime() / 1_000_000)?.let(onBitrateChange)
+                    rateController?.onPictureLoss(System.nanoTime() / 1_000_000)?.let(onBitrateChange)
                     onPictureLoss()
                 }
                 audioStream?.queue?.poll()?.let { sendFrame(audioStream, it) }
-                videoStream.queue.poll()?.let { sendFrame(videoStream, it) }
+                videoStream?.queue?.poll()?.let { sendFrame(videoStream, it) }
                 receiveFeedback(recv)
                 val now = System.nanoTime() / 1_000_000
-                when (inFlightController.update(now, videoStream.acknowledged,
-                        videoStream.history.firstOrNull()?.ptsUs,
-                        videoStream.history.lastOrNull()?.ptsUs,
-                        videoStream.targetDelayMs)) {
+                videoStream?.let { video -> when (inFlightController.update(now, video.acknowledged,
+                        video.history.firstOrNull()?.ptsUs,
+                        video.history.lastOrNull()?.ptsUs,
+                        video.targetDelayMs)) {
                     CastInFlightController.Action.PAUSE -> {
-                        synchronized(videoStream.queue) {
+                        synchronized(video.queue) {
                             capturePaused = true
                             recoveringVideo = true
-                            videoStream.queue.clear()
+                            video.queue.clear()
                         }
                         onCapturePaused(true)
                     }
                     CastInFlightController.Action.RESUME -> {
-                        synchronized(videoStream.queue) { capturePaused = false }
+                        synchronized(video.queue) { capturePaused = false }
                         onCapturePaused(false)
                     }
                     CastInFlightController.Action.FAIL -> {
@@ -144,7 +149,7 @@ internal class CastStreamingSender(
                         return
                     }
                     CastInFlightController.Action.NONE -> Unit
-                }
+                } }
                 for (stream in streams) {
                     if (stream.nextFrameId > 0 && now - stream.lastReportMs >= 500) {
                         send(CastStreamingProtocol.senderReport(stream.ssrc, stream.lastNtp,
@@ -153,11 +158,11 @@ internal class CastStreamingSender(
                     }
                 }
                 if (now - lastControlMs >= 500) {
-                    val oldestAge = videoStream.history.firstOrNull()?.let { now - it.sentAtMs } ?: 0L
-                    rateController.update(now, oldestAge)?.let(onBitrateChange)
+                    val oldestAge = videoStream?.history?.firstOrNull()?.let { now - it.sentAtMs } ?: 0L
+                    rateController?.update(now, oldestAge)?.let(onBitrateChange)
                     lastControlMs = now
                 }
-                if (videoStream.queue.isEmpty() && audioStream?.queue?.isEmpty() != false) {
+                if (videoStream?.queue?.isEmpty() != false && audioStream?.queue?.isEmpty() != false) {
                     Thread.sleep(1)
                 }
             } catch (_: InterruptedException) {
@@ -179,11 +184,11 @@ internal class CastStreamingSender(
         }
         val packets = stream.packetizer.packetize(id, rtp, frame.key, frame.data)
         for ((index, packet) in packets.withIndex()) {
-            if (stream == videoStream) paceVideo(packet.size)
+            if (videoStream != null && stream == videoStream) paceVideo(packet.size)
             send(packet)
             stream.packetCount++
             stream.octetCount += packet.size
-            if (stream == videoStream && index % 4 == 3) {
+            if (videoStream != null && stream == videoStream && index % 4 == 3) {
                 audioStream?.queue?.poll()?.let { sendFrame(audioStream, it) }
             }
         }
@@ -191,7 +196,7 @@ internal class CastStreamingSender(
         stream.lastNtp = ntp
         stream.history.addLast(SentFrame(id, frame.ptsUs, System.nanoTime() / 1_000_000, packets))
         while (stream.history.size > 120) stream.history.removeFirst()
-        if (id == 0L) logI("Cast Streaming: first ${if (stream == videoStream) "video" else "audio"} frame sent to $host:$port")
+        if (id == 0L) logI("Cast Streaming: first ${if (videoStream != null && stream == videoStream) "video" else "audio"} frame sent to $host:$port")
     }
 
     private fun receiveFeedback(buffer: ByteArray) {
@@ -207,9 +212,9 @@ internal class CastStreamingSender(
                         stream.targetDelayMs = delay
                     }
                     if (it >= 0) stream.acknowledged = true
-                    if (stream == videoStream && it > stream.checkpoint) {
+                    if (videoStream != null && stream == videoStream && it > stream.checkpoint) {
                         val now = System.nanoTime() / 1_000_000
-                        rateController.onCheckpoint(now, it - stream.checkpoint)
+                        rateController?.onCheckpoint(now, it - stream.checkpoint)
                         inFlightController.onCheckpoint(now)
                     }
                     stream.checkpoint = maxOf(stream.checkpoint, it)
@@ -221,15 +226,15 @@ internal class CastStreamingSender(
                     val sent = stream.history.firstOrNull { it.id == nack.frameId } ?: continue
                     if (System.nanoTime() / 1_000_000 - sent.sentAtMs >
                         stream.targetDelayMs + 250L) {
-                        if (stream == videoStream) requestReceiverKeyFrame()
+                        if (videoStream != null && stream == videoStream) requestReceiverKeyFrame()
                         continue
                     }
-                    if (stream == videoStream) rateController.onNack()
+                    if (videoStream != null && stream == videoStream) rateController?.onNack()
                     if (nack.packetId == 0xffff) sent.packets.forEach(::send)
                     else sent.packets.getOrNull(nack.packetId)?.let(::send)
                 }
-                if (stream == videoStream && feedback.pictureLoss) {
-                    rateController.onPictureLoss(System.nanoTime() / 1_000_000)?.let(onBitrateChange)
+                if (videoStream != null && stream == videoStream && feedback.pictureLoss) {
+                    rateController?.onPictureLoss(System.nanoTime() / 1_000_000)?.let(onBitrateChange)
                     requestReceiverKeyFrame()
                 }
             }
@@ -245,7 +250,7 @@ internal class CastStreamingSender(
     }
 
     private fun paceVideo(bytes: Int) {
-        val rateBytesPerSecond = maxOf(5_000_000, rateController.bitrate * 3) / 8.0
+        val rateBytesPerSecond = maxOf(5_000_000, (rateController?.bitrate ?: 3_000_000) * 3) / 8.0
         while (running) {
             val now = System.nanoTime()
             pacingBytes = minOf(24_000.0,

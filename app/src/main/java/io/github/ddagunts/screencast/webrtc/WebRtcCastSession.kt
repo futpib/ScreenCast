@@ -69,6 +69,7 @@ class WebRtcCastSession(
     private var transportId: String? = null
     private var sessionId: String? = null
     private var peer: WebRtcPeer? = null
+    val hasPlaybackCapture: Boolean get() = peer?.hasPlaybackCapture == true
 
     @Volatile private var lastHeartbeatMs: Long = 0L
 

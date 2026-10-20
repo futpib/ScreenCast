@@ -68,6 +68,24 @@ class CastStreamingProtocolTest {
         }
     }
 
+    @Test fun audioOnlyOfferAndAnswerDoNotRequireVideo() {
+        val audio = CastStreamingProtocol.AudioStream(
+            0x55667788, ByteArray(16) { 1 }, ByteArray(16) { 2 })
+        val offer = CastStreamingProtocol.audioOnlyOffer(12, audio)
+        val streams = offer.getJSONObject("offer").getJSONArray("supportedStreams")
+        assertEquals(1, streams.length())
+        assertEquals("audio_source", streams.getJSONObject(0).getString("type"))
+        assertEquals("opus", streams.getJSONObject(0).getString("codecName"))
+        assertEquals(0, streams.getJSONObject(0).getInt("index"))
+        val accepted = JSONObject("""{"type":"ANSWER","seqNum":12,"result":"ok",
+            "answer":{"udpPort":2345,"sendIndexes":[0]}}""")
+        assertEquals(2345, CastStreamingProtocol.audioOnlyAnswer(accepted, 12))
+        assertThrows(IllegalArgumentException::class.java) {
+            CastStreamingProtocol.audioOnlyAnswer(JSONObject("""{"type":"ANSWER","seqNum":12,
+                "result":"ok","answer":{"udpPort":2345,"sendIndexes":[1]}}"""), 12)
+        }
+    }
+
     @Test fun opusFrameUsesAudioPayloadAndIndependentEncryption() {
         val audio = CastStreamingProtocol.AudioStream(
             0x55667788, ByteArray(16) { (it + 1).toByte() }, ByteArray(16))

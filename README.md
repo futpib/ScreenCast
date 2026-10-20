@@ -14,8 +14,8 @@ An open-source Android app that casts the phone's screen to one or more Chromeca
 
 ## Choose what you want to do
 
-The home screen offers **Mirror my screen**, **Play a file or link**, **Control my
-TV**, and **Mirror to several TVs**. For one-TV mirroring, the app tries stock
+The home screen offers **Mirror my screen**, **Cast phone audio**, **Play a file
+or link**, **Control my TV**, and **Mirror to several TVs**. For one-TV mirroring, the app tries stock
 Cast Streaming first, then its WebRTC receiver if configured, then HLS. A
 connection failure advances to the next method; cancelling screen-sharing
 consent ends the attempt. Android asks for fresh screen-sharing consent on each
@@ -61,11 +61,28 @@ at a time. Playback audio capture requires Android 10+ and
 the audio permission. A bundled libopus encoder produces 10 ms audio packets.
 If audio capture is unavailable or the receiver declines it, the app sends video
 only. Android's playback capture rules limit which apps' sound can be captured.
+Once a receiver acknowledges captured audio, the app sets the phone's media
+volume to zero to prevent duplicate playback. It restores the prior level when
+casting stops, unless the user changed the phone's media volume in the meantime.
+This changes the phone's media volume for all apps; Android's playback capture
+does not reroute their audio output. If audio capture is unavailable, the app
+leaves phone volume unchanged.
 The receiver's target playout delay is 200 ms; actual latency depends on the
 device and network. The earlier audio and video sender was tested against a
 stock MiTV-MOEU0 receiver; the adaptive flow control still needs a TV regression test.
 The bundled [Opus 1.5.2 source](app/src/main/cpp/opus) is licensed under its
 [BSD license](app/src/main/cpp/opus/COPYING).
+
+## Cast phone audio
+
+Choose **Cast phone audio** to stream capturable media or game audio to a Cast
+speaker or TV without sending screen video. This launches the stock Cast
+Streaming audio-only receiver (`85CDB22F`), negotiates one Opus audio stream,
+and sends encrypted Cast RTP over UDP. Android still asks for MediaProjection
+and audio permission to capture other apps' playback. Apps that block playback
+capture cannot be streamed. The phone's media volume is silenced once the
+receiver acknowledges the stream and restored on stop, subject to any volume
+change the user makes while casting.
 
 ## Media playback on a TV
 
