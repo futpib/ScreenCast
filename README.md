@@ -12,7 +12,20 @@ An open-source Android app that casts the phone's screen to one or more Chromeca
   <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/05-advanced-settings.png" width="240" alt="Advanced settings for resolution, HLS buffering, and multi-TV synchronization" />
 </p>
 
-Captured on an Android 15 emulator with no TV on its network.
+The five screens above were captured on an Android 15 emulator without an active receiver.
+
+### Local receiver test
+
+The same emulator mirrored to a local Cast Streaming test receiver at `10.0.2.2`.
+The receiver acknowledged the UDP stream, and 83 received H.264 frames decoded
+at 640×360. The test used a debug APK signed with a temporary test root; the
+released app's Cast trust roots were unchanged. This checks the local sender
+path, not playback on a stock TV or end-to-end latency.
+
+<p>
+  <img src="docs/screenshots/local-receiver-mirroring.png" width="240" alt="Emulator mirroring screen to the local test receiver at 10.0.2.2" />
+  <img src="docs/screenshots/local-receiver-decoded-frame.png" width="480" alt="Video frame decoded from the test receiver's H.264 stream" />
+</p>
 
 ## Choose what you want to do
 
