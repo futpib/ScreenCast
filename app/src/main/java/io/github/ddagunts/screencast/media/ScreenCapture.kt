@@ -11,19 +11,32 @@ class ScreenCapture(private val context: Context) {
     data class Size(val width: Int, val height: Int, val dpi: Int)
 
     private var virtualDisplay: VirtualDisplay? = null
+    private var surface: Surface? = null
+    private var paused = false
 
-    fun start(projection: MediaProjection, surface: Surface, size: Size) {
+    @Synchronized fun start(projection: MediaProjection, surface: Surface, size: Size) {
         virtualDisplay = projection.createVirtualDisplay(
             "ScreenCast",
             size.width, size.height, size.dpi,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
             surface, null, null
         )
+        this.surface = surface
+        paused = false
         logI("VirtualDisplay created ${size.width}x${size.height}")
     }
 
-    fun stop() {
+    @Synchronized fun setPaused(value: Boolean) {
+        val display = virtualDisplay ?: return
+        if (paused == value) return
+        display.setSurface(if (value) null else surface)
+        paused = value
+    }
+
+    @Synchronized fun stop() {
         virtualDisplay?.release(); virtualDisplay = null
+        surface = null
+        paused = false
     }
 
     companion object {

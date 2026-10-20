@@ -158,6 +158,60 @@ class CastStreamingSenderTest {
         }
     }
 
+    @Test fun stopsCaptureUntilReceiverCatchesUpAndStartsWithKeyFrame() {
+        DatagramSocket(0, InetAddress.getLoopbackAddress()).use { receiver ->
+            receiver.soTimeout = 3_000
+            val stream = CastStreamingProtocol.VideoStream(
+                0x12345678, ByteArray(16), ByteArray(16), 1280, 720, 30, 3_000_000)
+            val paused = CountDownLatch(1)
+            val resumed = CountDownLatch(1)
+            val sender = CastStreamingSender("127.0.0.1", receiver.localPort, stream,
+                onCapturePaused = { if (it) paused.countDown() else resumed.countDown() }) {}
+            try {
+                sender.start()
+                sender.sendVideo(byteArrayOf(1), 1_000_000, true)
+                val first = receiveRtp(receiver)
+                sendCheckpoint(receiver, first, stream.ssrc, 0)
+                assertTrue(waitUntil(1_000) { sender.acknowledged })
+                for (frame in 1..15) {
+                    sender.sendVideo(byteArrayOf(2), 1_000_000L + frame * 33_333L, false)
+                    receiveRtp(receiver)
+                }
+                assertTrue(paused.await(1, TimeUnit.SECONDS))
+                sender.sendVideo(byteArrayOf(3), 1_500_000, true)
+                receiver.soTimeout = 100
+                assertTrue(runCatching { receiveRtp(receiver) }.isFailure)
+                receiver.soTimeout = 3_000
+                sendCheckpoint(receiver, first, stream.ssrc, 14)
+                assertTrue(resumed.await(1, TimeUnit.SECONDS))
+                sender.sendVideo(byteArrayOf(4), 1_533_333, false)
+                sender.sendVideo(byteArrayOf(5), 1_566_666, true)
+                val next = receiveRtp(receiver)
+                assertTrue(next.data[12].toInt() and 0x80 != 0)
+            } finally {
+                sender.stop()
+            }
+        }
+    }
+
+    private fun sendCheckpoint(socket: DatagramSocket, packet: DatagramPacket, ssrc: Int,
+                               frameId: Int) {
+        val bytes = ByteBuffer.allocate(20).order(ByteOrder.BIG_ENDIAN)
+            .put(0x8f.toByte()).put(206.toByte()).putShort(4)
+            .putInt(99).putInt(ssrc).putInt(0x43415354)
+            .put(frameId.toByte()).put(0).putShort(200).array()
+        socket.send(DatagramPacket(bytes, bytes.size, packet.socketAddress))
+    }
+
+    private fun waitUntil(timeoutMs: Long, condition: () -> Boolean): Boolean {
+        val end = System.nanoTime() + timeoutMs * 1_000_000
+        while (System.nanoTime() < end) {
+            if (condition()) return true
+            Thread.sleep(1)
+        }
+        return condition()
+    }
+
     private fun readInt(bytes: ByteArray, at: Int) =
         ByteBuffer.wrap(bytes, at, 4).order(ByteOrder.BIG_ENDIAN).int
 

@@ -52,7 +52,7 @@ internal class NativeCastSession(private val context: Context, val device: CastD
     private var sender: CastStreamingSender? = null
     private var encoder: VideoEncoder? = null
     private var audioEncoder: OpusPlaybackEncoder? = null
-    private var capture: ScreenCapture? = null
+    @Volatile private var capture: ScreenCapture? = null
     private var projection: MediaProjection? = null
     private var lastHeartbeat = System.currentTimeMillis()
     @Volatile private var stopped = false
@@ -101,7 +101,14 @@ internal class NativeCastSession(private val context: Context, val device: CastD
             val mediaSender = CastStreamingSender(device.host, accepted.port, stream,
                 if (accepted.audioAccepted) audioStream else null,
                 onPictureLoss = { encoder?.requestKeyFrame() },
-                onBitrateChange = { encoder?.setBitrate(it) })
+                onBitrateChange = { encoder?.setBitrate(it) },
+                onCapturePaused = { paused ->
+                    runCatching {
+                        capture?.setPaused(paused)
+                        if (!paused) encoder?.requestKeyFrame()
+                    }.onFailure { fail("capture flow control failed: ${it.message}") }
+                },
+                onTransportFailure = ::fail)
             sender = mediaSender
             mediaSender.start()
             startCapture(mp)
