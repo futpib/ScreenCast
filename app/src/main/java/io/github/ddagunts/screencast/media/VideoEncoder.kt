@@ -5,6 +5,7 @@ import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.os.Bundle
+import android.os.Build
 import android.view.Surface
 import io.github.ddagunts.screencast.util.logE
 import io.github.ddagunts.screencast.util.logI
@@ -180,6 +181,7 @@ class VideoEncoder(
 
     companion object {
         private fun requiredAvcLevel(width: Int, height: Int, fps: Int): Int = when {
+            width * height >= 3840 * 2160 -> MediaCodecInfo.CodecProfileLevel.AVCLevel51
             width * height >= 1920 * 1080 && fps > 30 -> MediaCodecInfo.CodecProfileLevel.AVCLevel42
             width * height >= 1920 * 1080 -> MediaCodecInfo.CodecProfileLevel.AVCLevel4
             width * height >= 1280 * 720 && fps > 30 -> MediaCodecInfo.CodecProfileLevel.AVCLevel32
@@ -189,6 +191,7 @@ class VideoEncoder(
 
         fun avcEncoderFor(width: Int, height: Int, fps: Int): String? =
             MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.firstOrNull { info ->
+                (width < 3840 || (Build.VERSION.SDK_INT >= 29 && info.isHardwareAccelerated)) &&
                 info.isEncoder && info.supportedTypes.any {
                     it.equals(MediaFormat.MIMETYPE_VIDEO_AVC, ignoreCase = true)
                 } && runCatching {

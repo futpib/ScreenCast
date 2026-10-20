@@ -21,6 +21,12 @@ The receiver acknowledged the UDP stream, and 83 received H.264 frames decoded
 at 640×360. The test used a debug APK signed with a temporary test root; the
 released app's Cast trust roots were unchanged. This checks the local sender
 path, not playback on a stock TV or end-to-end latency.
+In a forced-failure run, the emulator moved from native Cast to WebRTC and then
+HLS with one MediaProjection consent and one virtual display. The local receiver
+accepted a native video stream, stopped acknowledging it, then accepted the
+WebRTC offer and sent an invalid answer. The app replaced the virtual display's
+surface for WebRTC and HLS. This verifies capture handoff on the emulator; TV
+playback and glass-to-glass latency still need device testing.
 
 <p>
   <img src="docs/screenshots/local-receiver-mirroring.png" width="240" alt="Emulator mirroring screen to the local test receiver at 10.0.2.2" />
@@ -50,6 +56,7 @@ settings** in Settings.
 - **Discovery**: `NsdManager` finds Chromecasts via mDNS (`_googlecast._tcp.local`).
 - **Control channel**: TLS socket to Chromecast port 8009, Cast V2 protocol implemented in pure Kotlin (connection / heartbeat / receiver / media namespaces). Before sending a launch or stream key, the app authenticates the ephemeral TLS certificate with a signed Cast device-auth challenge against the [Google Cast and Eureka trust anchors published by Chromium](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/components/media_router/common/providers/cast/certificate/cast_trust_store.cc). The bundled public certificates are in `app/src/main/assets/cast/`.
 - **Capture**: Android `MediaProjection` + `MediaCodec` (H.264), optional audio via `AudioPlaybackCapture`.
+- **Automatic mirroring**: One foreground projection service retains the capture grant and virtual display while native Cast, WebRTC, and HLS are tried in order. Each transport attaches its own encoder surface to that display, so a retry does not request another screen-sharing grant. Android ends the capture when the user stops sharing or the app ends the attempt.
 - **HLS transport**: Used for several TVs and as a one-TV fallback. HLS is served from an embedded Ktor HTTP server on the phone. The server binds only to the Wi-Fi interface IP on a freshly-picked ephemeral port (not `0.0.0.0:8080`), so it isn't reachable over cellular or any other interface. The playlist lives under a path gated by a 128-bit random token (e.g. `http://<phone-ip>:<port>/c/<token>/stream.m3u8`); the token is generated fresh per cast session and is only valid while the foreground service is running. The Chromecast loads that URL through the Default Media Receiver (App ID `CC1AD845`). Expect ~5–10 s of latency.
 - **Multi-device casting**: Up to 4 Chromecasts can subscribe to the same HLS stream in parallel. Each has its own Cast V2 session, transport controls, and volume. The capture pipeline is started once on the first device and reused for the rest, so adding a second receiver doesn't retrigger the MediaProjection consent dialog.
 - **Sync across receivers**: HLS LIVE doesn't give receivers a shared clock, so by default each one picks its own live-edge and they drift. With **Sync start** enabled (Settings → Show advanced settings), the app coordinates a pause → seek → play handshake whenever a new device joins so every receiver lands on the same stream offset. A background loop then re-aligns every ~15 s: it polls `currentTime` on every session, pauses them all, seeks to the laggard's offset, and plays them back in parallel. This is best-effort — receiver-local offsets are only comparable while sessions stay connected.
@@ -65,15 +72,18 @@ Cast Streaming `OFFER`/`ANSWER`, and sends H.264 video and Opus playback audio
 as encrypted Cast RTP over UDP. Both streams share one UDP socket. The app
 handles RTCP sender reports, acknowledgements, retransmissions, and keyframe
 requests. It paces video packets, gives audio slots during large video frames,
-and adjusts the H.264 bitrate from acknowledgement progress, loss, and frames
-stalled in transit. The offer includes separate video profiles from 360p30
-through 1080p60 where the phone encoder supports them. The receiver chooses a
+and adjusts the H.264 bitrate from acknowledgement progress, round-trip time,
+loss, and frames stalled in transit. The offer includes separate video profiles
+from 360p30 through 1080p60 and an optional 4K30 profile where a hardware
+encoder supports it. The 1080p60 and 4K30 offers allow up to 10 and 12 Mbps,
+respectively, when the receiver accepts those rates. The receiver chooses a
 profile, then its reported dimensions, pixel rate, frame rate, bitrate, and
 delay further limit the capture. The encoder and rate controller stay within
-that negotiated bitrate ceiling. Sustained low throughput reduces capture
+the negotiated bitrate floor and ceiling. Sustained low throughput reduces capture
 resolution or frame rate within the accepted offer; sustained recovery raises
 it again. The app resizes the existing virtual display so it does not ask for
-another screen-sharing grant during those quality changes. When unacknowledged video spans more than the receiver's
+another screen-sharing grant during those quality changes or automatic transport
+failover. When unacknowledged video spans more than the receiver's
 playout delay budget, it pauses the virtual display before further frames are
 encoded. It resumes capture once acknowledgements catch up and requests a new
 keyframe. If a paused receiver stops making progress, automatic mirroring moves
@@ -94,8 +104,8 @@ leaves phone volume unchanged.
 The requested playout delay is 200 ms or less when the receiver requires it;
 actual glass-to-glass latency depends on the device and network and has not
 been measured for this build. The earlier audio and video sender was tested
-against a stock MiTV-MOEU0 receiver; device authentication, the multi-profile
-offer, and adaptive flow control still need a TV regression test. Receiver
+against a stock MiTV-MOEU0 receiver; device authentication, the expanded offer,
+adaptive flow control, and capture handoff still need a TV regression test. Receiver
 certificate revocation lists are not checked, matching Open Screen's optional
 CRL policy. Android cannot capture protected content or audio from apps that
 disallow playback capture, and ordinary apps cannot appear in the system Cast
@@ -117,6 +127,10 @@ change the user makes while casting.
 ## Media playback on a TV
 
 Choose **Play a file or link** to play a photo, video, or audio file on one TV.
+Android's Share menu can also send a local media file or direct HTTP(S) media
+URL to this screen. This direct-media path lets the TV decode supported content
+without screen re-encoding. It cannot extract an arbitrary app's protected or
+private video stream for Cast remoting.
 Select a file with Android's document picker or enter a direct HTTP(S) media
 URL, then tap a TV. A web page URL will not work; the receiver must
 be able to fetch and decode the media itself. This mode does not mirror the

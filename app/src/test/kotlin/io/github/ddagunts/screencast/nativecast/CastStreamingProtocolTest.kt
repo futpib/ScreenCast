@@ -14,6 +14,24 @@ import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 class CastStreamingProtocolTest {
+    @Test fun receiverMinimumBitrateDoesNotRejectValidVideoOffer() {
+        val profile = CastVideoQuality.profiles.first { it.width == 1920 && it.fps == 60 }
+        val stream = CastStreamingProtocol.VideoStream.random(profile.width, profile.height,
+            profile.fps, profile.bitrate).copy(minBitRate = 5_000_000)
+        val initial = CastVideoQuality.initialBitrate(stream, profile)
+        assertEquals(5_000_000, initial)
+        CastRateController(initial, minBitrate = stream.minBitRate, maxBitrate = stream.bitRate)
+    }
+
+    @Test fun fourKOfferDeclaresSupportedAvcLevel() {
+        val profile = CastVideoQuality.profiles.first { it.width == 3840 }
+        val stream = CastStreamingProtocol.VideoStream.random(profile.width, profile.height,
+            profile.fps, profile.bitrate)
+        val video = CastStreamingProtocol.offer(1, stream)
+            .getJSONObject("offer").getJSONArray("supportedStreams").getJSONObject(0)
+        assertEquals("5.1", video.getString("level"))
+        assertEquals(12_000_000, video.getInt("maxBitRate"))
+    }
     private val stream = CastStreamingProtocol.VideoStream(
         0x12345678, ByteArray(16) { it.toByte() }, ByteArray(16) { (it + 20).toByte() },
         1280, 720, 30, 3_000_000)

@@ -85,6 +85,7 @@ internal object CastStreamingProtocol {
                 .put("errorRecoveryMode", "intra_mb_refresh")
                 .put("profile", "baseline")
                 .put("level", when {
+                    stream.width * stream.height >= 3840 * 2160 -> "5.1"
                     stream.width * stream.height >= 1920 * 1080 && stream.fps > 30 -> "4.2"
                     stream.width * stream.height >= 1920 * 1080 -> "4"
                     stream.width * stream.height >= 1280 * 720 && stream.fps > 30 -> "3.2"

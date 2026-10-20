@@ -7,10 +7,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -32,6 +34,7 @@ fun MirrorIntentScreen(vm: MirrorIntentViewModel, devicesVm: WebRtcViewModel) {
             style = MaterialTheme.typography.bodySmall)
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (state.busy && !state.casting) CircularProgressIndicator(Modifier.size(24.dp))
                 Text(state.message)
                 state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 if (state.busy) Button(onClick = vm::stop) {
@@ -60,7 +63,7 @@ fun MirrorIntentScreen(vm: MirrorIntentViewModel, devicesVm: WebRtcViewModel) {
             }
         }
         ManualHostRow("Connect by IP", devicesVm::addManualHost)
-        Text("Android asks to share your screen for each connection attempt, including a retry.",
+        Text("Android asks to share your screen once. The app keeps that capture during connection retries.",
             style = MaterialTheme.typography.bodySmall)
     }
 }

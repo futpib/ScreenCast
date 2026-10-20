@@ -2,10 +2,12 @@ package io.github.ddagunts.screencast.ui
 
 import android.app.Application
 import android.content.Intent
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.ddagunts.screencast.CastForegroundService
 import io.github.ddagunts.screencast.MirrorAttemptRegistry
+import io.github.ddagunts.screencast.MirrorProjectionService
 import io.github.ddagunts.screencast.NativeCastForegroundService
 import io.github.ddagunts.screencast.StartPermissionActivity
 import io.github.ddagunts.screencast.WebRtcForegroundService
@@ -34,14 +36,11 @@ data class MirrorIntentState(
     val error: String? = null,
 )
 
-// Automatic mirroring keeps the transport choice out of the normal UI. Each
-// retry obtains a fresh MediaProjection grant because Android consumes the
-// previous grant when the previous service starts capture.
+// Automatic mirroring owns one MediaProjection grant while transports retry.
 class MirrorIntentViewModel(app: Application) : AndroidViewModel(app) {
     private enum class Method { NATIVE, WEBRTC, HLS }
     private sealed interface Result {
         data object Ended : Result
-        data object Declined : Result
         data class Failed(val reason: String) : Result
     }
 
@@ -101,10 +100,31 @@ class MirrorIntentViewModel(app: Application) : AndroidViewModel(app) {
             add(Method.HLS)
         }
         val token = ++runToken
+        val id = UUID.randomUUID().toString()
+        attemptId = id
+        MirrorAttemptRegistry.begin(id)
         job = viewModelScope.launch {
             var lastError = "No connection method succeeded"
             try {
+                requestProjection(id, wholeScreen)
+                val consent = MirrorAttemptRegistry.consent.filterNotNull().first { it.id == id }
+                if (!consent.granted) {
+                    _state.value = MirrorIntentState(message = "Screen capture was cancelled.")
+                    return@launch
+                }
+                val projection = withTimeoutOrNull(10_000) {
+                    MirrorProjectionService.lease.first { it?.id == id }
+                }
+                if (projection == null) {
+                    _state.value = MirrorIntentState(error = MirrorProjectionService.error.value
+                        ?: "Could not start screen capture")
+                    return@launch
+                }
                 for ((index, next) in methods.withIndex()) {
+                    if (MirrorProjectionService.lease.value?.id != id) {
+                        _state.value = MirrorIntentState(error = "Screen sharing ended.")
+                        return@launch
+                    }
                     method = next
                     _state.value = MirrorIntentState(
                         device = device,
@@ -113,13 +133,9 @@ class MirrorIntentViewModel(app: Application) : AndroidViewModel(app) {
                         busy = true,
                         retrying = index > 0,
                     )
-                    when (val result = attempt(next, device, wholeScreen)) {
+                    when (val result = attempt(next, device, id)) {
                         Result.Ended -> {
                             _state.value = MirrorIntentState()
-                            return@launch
-                        }
-                        Result.Declined -> {
-                            _state.value = MirrorIntentState(message = "Screen capture was cancelled.")
                             return@launch
                         }
                         is Result.Failed -> {
@@ -141,6 +157,7 @@ class MirrorIntentViewModel(app: Application) : AndroidViewModel(app) {
             } finally {
                 if (runToken == token) {
                     attemptId?.let(MirrorAttemptRegistry::cancel)
+                    stopProjection(id)
                     attemptId = null
                     method = null
                     job = null
@@ -152,6 +169,7 @@ class MirrorIntentViewModel(app: Application) : AndroidViewModel(app) {
     fun stop() {
         runToken++
         attemptId?.let(MirrorAttemptRegistry::cancel)
+        attemptId?.let(::stopProjection)
         job?.cancel()
         val current = method
         val host = _state.value.device?.host
@@ -162,13 +180,10 @@ class MirrorIntentViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = MirrorIntentState()
     }
 
-    private suspend fun attempt(next: Method, device: CastDevice, wholeScreen: Boolean): Result {
-        val id = UUID.randomUUID().toString()
-        attemptId = id
-        MirrorAttemptRegistry.begin(id)
-        launch(next, device, id, wholeScreen)
-        val consent = MirrorAttemptRegistry.consent.filterNotNull().first { it.id == id }
-        if (!consent.granted) return Result.Declined
+    private suspend fun attempt(next: Method, device: CastDevice, id: String): Result {
+        if (MirrorProjectionService.lease.value?.id != id)
+            return Result.Failed("screen sharing ended")
+        launch(next, device, id)
         val host = device.host
         val status = when (next) {
             Method.NATIVE -> NativeCastForegroundService.sessionFlow.map { snap ->
@@ -179,10 +194,14 @@ class MirrorIntentViewModel(app: Application) : AndroidViewModel(app) {
             }
             Method.HLS -> CastForegroundService.devicesFlow.map { it[host]?.castState }
         }
+        var started = false
         val first = withTimeoutOrNull(50_000) {
-            status.onEach { updateStatus(it, device) }
-                .first { it?.startsWith("CASTING") == true || it?.startsWith("ERROR") == true }
-        } ?: return Result.Failed("Connection timed out")
+            status.onEach {
+                if (it != null) started = true
+                updateStatus(it, device)
+            }.first { it?.startsWith("CASTING") == true ||
+                it?.startsWith("ERROR") == true || (started && it == null) }
+        } ?: return Result.Failed("Connection ended before mirroring started")
         if (first.startsWith("ERROR")) return Result.Failed(errorFor(next, host))
         _state.value = MirrorIntentState(device,
             if (next == Method.HLS) "Mirroring to ${device.name} using video playback (about 5–10 s delay)"
@@ -199,8 +218,8 @@ class MirrorIntentViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun retryMessage(next: Method?, name: String): String =
-        if (next == Method.HLS) "Trying video playback on $name (about 5–10 s delay). Approve screen sharing again."
-        else "Trying another way to connect to $name. Approve screen sharing again."
+        if (next == Method.HLS) "Trying video playback on $name (about 5–10 s delay)."
+        else "Trying another way to connect to $name."
 
     private fun errorFor(next: Method, host: String): String = when (next) {
         Method.NATIVE -> NativeCastForegroundService.sessionFlow.value?.status
@@ -211,32 +230,52 @@ class MirrorIntentViewModel(app: Application) : AndroidViewModel(app) {
             ?: "Video connection failed"
     }
 
-    private fun launch(next: Method, device: CastDevice, id: String, wholeScreen: Boolean) {
+    private fun requestProjection(id: String, wholeScreen: Boolean) {
         val app = getApplication<Application>()
-        val intent = Intent(app, StartPermissionActivity::class.java).apply {
+        app.startActivity(Intent(app, StartPermissionActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            putExtra(StartPermissionActivity.EXTRA_DESTINATION, StartPermissionActivity.DESTINATION_AUTO)
             putExtra(StartPermissionActivity.EXTRA_MIRROR_ATTEMPT_ID, id)
             putExtra(StartPermissionActivity.EXTRA_WHOLE_SCREEN, wholeScreen)
-            putExtra(StartPermissionActivity.EXTRA_REQUEST_AUDIO, next != Method.WEBRTC ||
-                WebRtcConfigStore(app).audioEnabled)
+            putExtra(StartPermissionActivity.EXTRA_REQUEST_AUDIO, true)
+        })
+    }
+
+    private fun stopProjection(id: String) {
+        val app = getApplication<Application>()
+        app.startService(Intent(app, MirrorProjectionService::class.java).apply {
+            action = MirrorProjectionService.ACTION_STOP
+            putExtra(MirrorProjectionService.EXTRA_ID, id)
+        })
+    }
+
+    private fun launch(next: Method, device: CastDevice, id: String) {
+        val app = getApplication<Application>()
+        val target = when (next) {
+            Method.NATIVE -> NativeCastForegroundService::class.java
+            Method.WEBRTC -> WebRtcForegroundService::class.java
+            Method.HLS -> CastForegroundService::class.java
+        }
+        val intent = Intent(app, target).apply {
+            putExtra(StartPermissionActivity.EXTRA_MIRROR_ATTEMPT_ID, id)
         }
         when (next) {
             Method.NATIVE -> intent.apply {
-                putExtra(StartPermissionActivity.EXTRA_DESTINATION, StartPermissionActivity.DESTINATION_NATIVE)
+                action = NativeCastForegroundService.ACTION_START
                 putExtra(NativeCastForegroundService.EXTRA_DEVICE_NAME, device.name)
                 putExtra(NativeCastForegroundService.EXTRA_DEVICE_HOST, device.host)
                 putExtra(NativeCastForegroundService.EXTRA_DEVICE_PORT, device.port)
             }
             Method.WEBRTC -> intent.apply {
-                putExtra(StartPermissionActivity.EXTRA_DESTINATION, StartPermissionActivity.DESTINATION_WEBRTC)
+                action = WebRtcForegroundService.ACTION_START
                 putExtra(WebRtcForegroundService.EXTRA_DEVICE_NAME, device.name)
                 putExtra(WebRtcForegroundService.EXTRA_DEVICE_HOST, device.host)
                 putExtra(WebRtcForegroundService.EXTRA_DEVICE_PORT, device.port)
                 putExtra(WebRtcForegroundService.EXTRA_APP_ID, WebRtcConfigStore(app).appId)
             }
             Method.HLS -> intent.apply {
+                action = CastForegroundService.ACTION_START
                 val cfg = StreamConfigStore(app).load()
-                putExtra(StartPermissionActivity.EXTRA_DESTINATION, StartPermissionActivity.DESTINATION_HLS)
                 putExtra(CastForegroundService.EXTRA_DEVICE_NAME, device.name)
                 putExtra(CastForegroundService.EXTRA_DEVICE_HOST, device.host)
                 putExtra(CastForegroundService.EXTRA_DEVICE_PORT, device.port)
@@ -249,7 +288,7 @@ class MirrorIntentViewModel(app: Application) : AndroidViewModel(app) {
                 putExtra(CastForegroundService.EXTRA_SYNC_DRIFT_MS, cfg.syncDriftThresholdMs)
             }
         }
-        app.startActivity(intent)
+        ContextCompat.startForegroundService(app, intent)
     }
 
     private suspend fun stopAndWait(next: Method, host: String): Boolean {

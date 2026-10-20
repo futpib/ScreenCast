@@ -6,16 +6,21 @@ internal object CastVideoQuality {
     data class Profile(val width: Int, val height: Int, val fps: Int, val bitrate: Int,
                        val minBitrate: Int)
 
-    // Prefer smooth input response, then image detail. All profiles stay inside
-    // the H.264 Baseline 4.2 offer and use standard 16:9 encoder dimensions.
+    // The receiver selects an offer; each candidate stays within its limits.
     val profiles = listOf(
-        Profile(1920, 1080, 60, 6_000_000, 4_000_000),
-        Profile(1280, 720, 60, 4_000_000, 2_000_000),
-        Profile(1920, 1080, 30, 4_000_000, 2_500_000),
-        Profile(1280, 720, 30, 3_000_000, 1_000_000),
-        Profile(960, 540, 30, 1_800_000, 650_000),
-        Profile(640, 360, 30, 900_000, 300_000),
+        Profile(3840, 2160, 30, 12_000_000, 8_000_000),
+        Profile(1920, 1080, 60, 10_000_000, 4_000_000),
+        Profile(1280, 720, 60, 6_000_000, 2_000_000),
+        Profile(1920, 1080, 30, 7_000_000, 2_500_000),
+        Profile(1280, 720, 30, 4_000_000, 1_000_000),
+        Profile(960, 540, 30, 2_000_000, 650_000),
+        Profile(640, 360, 30, 1_000_000, 300_000),
     )
+
+    fun initialBitrate(stream: CastStreamingProtocol.VideoStream, profile: Profile): Int {
+        require(stream.minBitRate <= stream.bitRate)
+        return minOf(stream.bitRate, maxOf(3_000_000, profile.minBitrate, stream.minBitRate))
+    }
 
     fun select(limits: CastStreamingProtocol.VideoLimits?,
                supports: (Profile) -> Boolean): Profile =

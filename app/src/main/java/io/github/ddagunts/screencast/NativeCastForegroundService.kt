@@ -58,10 +58,15 @@ class NativeCastForegroundService : Service() {
         val port = intent.getIntExtra(EXTRA_DEVICE_PORT, 8009)
         val code = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
         audioOnly = intent.getBooleanExtra(EXTRA_AUDIO_ONLY, false)
+        val leaseId = intent.getStringExtra(StartPermissionActivity.EXTRA_MIRROR_ATTEMPT_ID)
+        val lease = leaseId?.let { MirrorProjectionService.lease.value?.takeIf { active -> active.id == it } }
         val data: Intent? = if (Build.VERSION.SDK_INT >= 33)
             intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
         else @Suppress("DEPRECATION") intent.getParcelableExtra(EXTRA_RESULT_DATA)
-        if (data == null) return
+        if (data == null && lease == null) {
+            stopSelf()
+            return
+        }
         ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(name, "Connecting"),
             if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION else 0)
         val lock = (getSystemService(POWER_SERVICE) as PowerManager).newWakeLock(
@@ -70,7 +75,7 @@ class NativeCastForegroundService : Service() {
         lock.acquire()
         wakeLock = lock
         val device = CastDevice(name, host, port)
-        val s = NativeCastSession(this, device, audioOnly)
+        val s = NativeCastSession(this, device, audioOnly, lease)
         session = s
         _session.value = Snapshot(device, "CONNECTING")
         stateJob = scope.launch {

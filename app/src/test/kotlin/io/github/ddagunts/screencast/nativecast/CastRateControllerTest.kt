@@ -52,4 +52,19 @@ class CastRateControllerTest {
         control.onCheckpoint(6_000, 12)
         assertEquals(850_000, control.update(6_100, 0, 200))
     }
+
+    @Test fun sustainedRttGrowthWithBacklogDropsBitrate() {
+        val control = CastRateController(5_000_000, maxBitrate = 10_000_000)
+        control.onCheckpoint(1_000, 1, 30)
+        repeat(12) { control.onCheckpoint(1_100L + it * 100, 1, 250) }
+        assertEquals(3_750_000, control.update(2_500, 250, 200))
+    }
+
+    @Test fun sparseVideoDoesNotTreatHighRttAloneAsCongestion() {
+        val control = CastRateController(5_000_000, maxBitrate = 10_000_000)
+        control.onCheckpoint(1_000, 1, 30)
+        repeat(12) { control.onCheckpoint(1_100L + it * 100, 1, 250) }
+        assertNull(control.update(2_500, 0, 200))
+        assertEquals(5_000_000, control.bitrate)
+    }
 }

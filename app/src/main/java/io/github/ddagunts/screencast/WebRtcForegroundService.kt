@@ -82,10 +82,12 @@ class WebRtcForegroundService : Service() {
         val port = intent.getIntExtra(EXTRA_DEVICE_PORT, 8009)
         val appId = intent.getStringExtra(EXTRA_APP_ID) ?: ""
         val code = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
+        val leaseId = intent.getStringExtra(StartPermissionActivity.EXTRA_MIRROR_ATTEMPT_ID)
+        val lease = leaseId?.let { MirrorProjectionService.lease.value?.takeIf { active -> active.id == it } }
         val data: Intent? = if (Build.VERSION.SDK_INT >= 33)
             intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
         else @Suppress("DEPRECATION") intent.getParcelableExtra(EXTRA_RESULT_DATA)
-        if (data == null) {
+        if (data == null && lease == null) {
             logE("webrtc: ACTION_START missing projection result data (code=$code)")
             stopSelfIfIdle()
             return
@@ -151,12 +153,12 @@ class WebRtcForegroundService : Service() {
                 }
             }
             runCatching {
-                s.startCast(appId, data) {
+                s.startCast(appId, data, {
                     // MediaProjection revoked from the notification — treat
                     // as an explicit stop.
                     logW("webrtc: projection onStop → stopping service")
                     stopCast()
-                }
+                }, lease)
             }.onFailure { e ->
                 logE("webrtc: startCast threw", e)
                 _session.value = SessionSnapshot(device, "ERROR", e.message ?: "start failed")

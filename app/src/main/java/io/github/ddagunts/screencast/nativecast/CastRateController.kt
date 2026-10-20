@@ -16,8 +16,11 @@ internal class CastRateController(
     private var pendingLosses = 0
     private var acknowledgedFrames = 0L
     private var receivedCheckpoint = false
+    private var baseRttMs = Long.MAX_VALUE
+    private var smoothedRttMs = 0L
+    private var delayedCheckpoints = 0
 
-    fun onCheckpoint(nowMs: Long, frames: Long) {
+    fun onCheckpoint(nowMs: Long, frames: Long, rttMs: Long? = null) {
         if (!receivedCheckpoint) {
             lastChangeMs = nowMs
             lastCongestionMs = nowMs
@@ -25,6 +28,13 @@ internal class CastRateController(
         receivedCheckpoint = true
         lastProgressMs = nowMs
         acknowledgedFrames += frames.coerceAtLeast(0)
+        if (rttMs != null && rttMs in 1..3_000) {
+            baseRttMs = minOf(baseRttMs, rttMs)
+            smoothedRttMs = if (smoothedRttMs == 0L) rttMs
+                else (smoothedRttMs * 7 + rttMs) / 8
+            delayedCheckpoints = if (smoothedRttMs > baseRttMs + maxOf(100, baseRttMs))
+                delayedCheckpoints + 1 else 0
+        }
     }
 
     fun onNack() {
@@ -39,6 +49,7 @@ internal class CastRateController(
         if (!receivedCheckpoint) return null
         val delay = targetDelayMs.coerceIn(100, 1_000)
         val congested = pendingLosses >= 2 ||
+            (delayedCheckpoints >= 3 && oldestInFlightMs > delay) ||
             (oldestInFlightMs > maxOf(300, delay * 2) &&
                 nowMs - lastProgressMs > maxOf(200, delay))
         pendingLosses = 0
@@ -55,6 +66,7 @@ internal class CastRateController(
 
     private fun decrease(nowMs: Long): Int? {
         lastCongestionMs = nowMs
+        delayedCheckpoints = 0
         if (lastChangeMs != 0L && nowMs - lastChangeMs < 700) return null
         val next = maxOf(minBitrate, bitrate * 3 / 4)
         if (next == bitrate) return null

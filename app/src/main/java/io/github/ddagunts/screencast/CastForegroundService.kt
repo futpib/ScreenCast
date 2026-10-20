@@ -60,6 +60,7 @@ class CastForegroundService : Service() {
     private var server: HttpStreamServer? = null
     private var segmenter: HlsSegmenter? = null
     private var projection: MediaProjection? = null
+    private var projectionLease: MirrorProjectionService.Lease? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var pipelineUrl: String? = null
     private var config: StreamConfig = StreamConfig()
@@ -158,12 +159,14 @@ class CastForegroundService : Service() {
 
         // First device — MediaProjection result is required.
         val code = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
+        val leaseId = intent.getStringExtra(StartPermissionActivity.EXTRA_MIRROR_ATTEMPT_ID)
+        val lease = leaseId?.let { MirrorProjectionService.lease.value?.takeIf { active -> active.id == it } }
         val data: Intent? = if (Build.VERSION.SDK_INT >= 33)
             intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
         else @Suppress("DEPRECATION") intent.getParcelableExtra(EXTRA_RESULT_DATA)
-        if (data == null) {
+        if (data == null && lease == null) {
             logE("ACTION_START missing projection result data")
-            stopSelfIfEmpty()
+            stopSelf()
             return
         }
         val resName = intent.getStringExtra(EXTRA_RESOLUTION)
@@ -176,7 +179,7 @@ class CastForegroundService : Service() {
         )
         logI("stream config: ${config.resolution.label} segment=${config.segmentDurationSec}s window=${config.windowSize} keyframe=${config.keyframeIntervalSec}s seed=${config.seedSegmentCount} liveEdge=${config.liveEdgeFactor}x")
         startForegroundNow()
-        startPipelineAndFirstSession(code, data, dev)
+        startPipelineAndFirstSession(code, data, dev, lease)
     }
 
     // Must be called *before* MediaProjectionManager.getMediaProjection(). On API 35+
@@ -252,11 +255,12 @@ class CastForegroundService : Service() {
         wakeLock = null
     }
 
-    private fun startPipelineAndFirstSession(resultCode: Int, resultData: Intent, dev: CastDevice) {
+    private fun startPipelineAndFirstSession(resultCode: Int, resultData: Intent?, dev: CastDevice,
+                                             lease: MirrorProjectionService.Lease? = null) {
         val size = ScreenCapture.sizeFor(this, config.resolution)
-        val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         val proj = try {
-            mpm.getMediaProjection(resultCode, resultData)
+            lease?.projection ?: (getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager)
+                .getMediaProjection(resultCode, resultData ?: error("screen projection grant missing"))
         } catch (e: Throwable) {
             logE("getMediaProjection failed (resultCode=$resultCode)", e)
             emitDeviceError(dev, "media projection failed: ${e.message}")
@@ -266,13 +270,14 @@ class CastForegroundService : Service() {
             emitDeviceError(dev, "media projection unavailable — consent likely denied")
             stopSelfIfEmpty(); return
         }
-        proj.registerCallback(object : MediaProjection.Callback() {
+        if (lease == null) proj.registerCallback(object : MediaProjection.Callback() {
             override fun onStop() {
                 logI("MediaProjection stopped — tearing all sessions down")
                 stopAll()
             }
         }, null)
         projection = proj
+        projectionLease = lease
         acquireWakeLock()
 
         val seg = HlsSegmenter(
@@ -290,8 +295,8 @@ class CastForegroundService : Service() {
         )
         encoder = enc
         enc.start(seg)
-        val cap = ScreenCapture(this).also { capture = it }
-        cap.start(proj, enc.inputSurface, size)
+        if (lease != null) lease.attach(enc.inputSurface, size)
+        else ScreenCapture(this).also { capture = it }.start(proj, enc.inputSurface, size)
 
         val ip = NetworkUtils.getWifiIpAddress(this) ?: run {
             logE("no LAN IP — cannot tell Chromecast where to fetch")
@@ -408,7 +413,8 @@ class CastForegroundService : Service() {
             volume = CastVolume(),
         ))
         val job = scope.launch {
-            val seedTarget = config.seedSegmentCount
+            val seedTarget = if (projectionLease != null) minOf(2, config.seedSegmentCount)
+                else config.seedSegmentCount
             for (attempt in 0 until 150) {
                 if (seg.readySegmentCount() >= seedTarget) break
                 delay(100)
@@ -564,6 +570,7 @@ class CastForegroundService : Service() {
         val dev = _devices.value[host]
         if (dev == null) {
             logW("stopDevice: no entry for $host")
+            stopSelfIfEmpty()
             return
         }
         val session = sessions.remove(host)
@@ -593,15 +600,18 @@ class CastForegroundService : Service() {
     private fun teardownPipeline() {
         maintainJob?.cancel()
         maintainJob = null
-        runCatching { capture?.stop() }.onFailure { logW("teardown capture: $it") }
+        if (projectionLease != null) runCatching { projectionLease?.detach() }
+            .onFailure { logW("teardown capture: $it") }
+        else runCatching { capture?.stop() }.onFailure { logW("teardown capture: $it") }
         runCatching { encoder?.stop() }.onFailure { logW("teardown encoder: $it") }
         runCatching { audioEncoder?.stop() }.onFailure { logW("teardown audioEncoder: $it") }
         PhoneMediaVolume.restore(this, this)
         runCatching { server?.stop() }.onFailure { logW("teardown server: $it") }
-        runCatching { projection?.stop() }.onFailure { logW("teardown projection: $it") }
+        if (projectionLease == null) runCatching { projection?.stop() }
+            .onFailure { logW("teardown projection: $it") }
         releaseWakeLock()
         capture = null; encoder = null; audioEncoder = null
-        server = null; segmenter = null; projection = null
+        server = null; segmenter = null; projection = null; projectionLease = null
         pipelineUrl = null
         logW("pipeline torn down")
     }
@@ -629,7 +639,10 @@ class CastForegroundService : Service() {
     private fun removeSession(host: String) {
         sessions.remove(host)
         sessionJobs.remove(host)?.cancel()
-        _devices.value = _devices.value - host
+        // Keep a startup error visible until the caller can observe and dismiss it.
+        if (_devices.value[host]?.castState != "ERROR") {
+            _devices.value = _devices.value - host
+        }
         if (sessions.isEmpty()) teardownPipeline()
         stopSelfIfEmpty()
     }

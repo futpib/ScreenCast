@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
 import io.github.ddagunts.screencast.cast.CastChannel
+import io.github.ddagunts.screencast.MirrorProjectionService
 import io.github.ddagunts.screencast.cast.CastDevice
 import io.github.ddagunts.screencast.cast.CastMessage
 import io.github.ddagunts.screencast.cast.CastNs
@@ -73,7 +74,8 @@ class WebRtcCastSession(
 
     @Volatile private var lastHeartbeatMs: Long = 0L
 
-    suspend fun startCast(appId: String, projectionData: Intent, onProjectionStopped: () -> Unit) {
+    suspend fun startCast(appId: String, projectionData: Intent?, onProjectionStopped: () -> Unit,
+                          lease: MirrorProjectionService.Lease? = null) {
         if (appId.isBlank()) {
             _state.value = WebRtcState.Error("custom App ID is not set — open Settings and paste it")
             return
@@ -135,7 +137,7 @@ class WebRtcCastSession(
         })
         peer = p
         p.build()
-        p.addScreenSource(projectionData) { onProjectionStopped() }
+        p.addScreenSource(projectionData, onProjectionStopped, lease)
 
         val offerSdp = p.createOffer()
         channel.send(offerMsg(tid, offerSdp))

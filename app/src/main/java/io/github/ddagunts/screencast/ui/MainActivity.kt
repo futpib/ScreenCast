@@ -1,6 +1,7 @@
 package io.github.ddagunts.screencast.ui
 
 import android.app.Activity
+import android.content.Intent
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
@@ -39,6 +40,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -66,11 +68,18 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         PhoneMediaVolume.restoreStale(this)
+        mediaVm.acceptSharedIntent(intent)
         setContent {
             ScreenCastTheme {
                 Surface(Modifier.fillMaxSize()) { AppScaffold(vm, webRtcVm, atvVm, nativeVm, mediaVm, mirrorVm) }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        mediaVm.acceptSharedIntent(intent)
     }
 }
 
@@ -115,6 +124,16 @@ private fun AppScaffold(
     mirrorVm: MirrorIntentViewModel,
 ) {
     var screen by rememberSaveable { mutableStateOf(Screen.Home) }
+    var openedShareId by rememberSaveable { mutableStateOf(0L) }
+    val shared by mediaVm.shared.collectAsStateWithLifecycle()
+    LaunchedEffect(shared?.id) {
+        shared?.let {
+            if (it.id != openedShareId) {
+                screen = Screen.Media
+                openedShareId = it.id
+            }
+        }
+    }
     BackHandler(enabled = screen != Screen.Home) { screen = Screen.Home }
     val castMode by vm.castMode.collectAsStateWithLifecycle()
     Scaffold(topBar = {

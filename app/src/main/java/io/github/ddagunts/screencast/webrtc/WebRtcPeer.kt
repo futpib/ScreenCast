@@ -3,6 +3,7 @@ package io.github.ddagunts.screencast.webrtc
 import android.content.Context
 import android.content.Intent
 import android.media.projection.MediaProjection
+import io.github.ddagunts.screencast.MirrorProjectionService
 import io.github.ddagunts.screencast.util.logE
 import io.github.ddagunts.screencast.util.logI
 import io.github.ddagunts.screencast.util.logW
@@ -27,6 +28,7 @@ import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
 import org.webrtc.SurfaceTextureHelper
 import org.webrtc.VideoSource
+import org.webrtc.VideoCapturer
 import org.webrtc.VideoTrack
 import org.webrtc.audio.JavaAudioDeviceModule
 
@@ -48,7 +50,7 @@ class WebRtcPeer(
     private var peer: PeerConnection? = null
     private var videoSource: VideoSource? = null
     private var videoTrack: VideoTrack? = null
-    private var capturer: ScreenCapturerAndroid? = null
+    private var capturer: VideoCapturer? = null
     private var surfaceTextureHelper: SurfaceTextureHelper? = null
     private var audioModule: JavaAudioDeviceModule? = null
     private var audioCapture: WebRtcAudioCapture? = null
@@ -138,18 +140,18 @@ class WebRtcPeer(
             ?: error("PeerConnectionFactory.createPeerConnection returned null")
     }
 
-    // Attach a screen-source track. Uses libwebrtc's ScreenCapturerAndroid which
-    // wraps MediaProjection internally. The MediaProjection callback onStop is
-    // forwarded via the `onProjectionStopped` lambda so the caller can tear
-    // the whole session down when the user revokes consent from the notification.
+    // Attach a screen-source track. A standalone cast uses ScreenCapturerAndroid;
+    // automatic mirroring gives libwebrtc the surface of the retained display.
+    // The projection owner handles revocation for the latter path.
     //
     // On Android 14+, MediaProjection must be obtained via Intent within a
     // foreground service that's already started with the mediaProjection FGS
     // type — ScreenCapturerAndroid.initialize() does that internally using
     // the result data we pass through.
     fun addScreenSource(
-        projectionData: Intent,
+        projectionData: Intent?,
         onProjectionStopped: () -> Unit,
+        lease: MirrorProjectionService.Lease? = null,
     ) {
         val pc = peer ?: error("addScreenSource: build() first")
         val f = factory ?: error("addScreenSource: build() first")
@@ -160,7 +162,9 @@ class WebRtcPeer(
                 onProjectionStopped()
             }
         }
-        val cap = ScreenCapturerAndroid(projectionData, projectionCallback)
+        val cap: VideoCapturer = if (lease != null) LeaseScreenCapturer(lease)
+            else ScreenCapturerAndroid(projectionData ?: error("projection grant missing"),
+                projectionCallback)
         capturer = cap
 
         val source = f.createVideoSource(cap.isScreencast)
@@ -191,7 +195,7 @@ class WebRtcPeer(
             // AudioPlaybackCapture so we don't need a second consent prompt.
             // If the projection isn't exposed yet (older AAR), the audio
             // callback streams silence — the track still exists, just empty.
-            val projection = cap.mediaProjection
+            val projection = lease?.projection ?: (cap as? ScreenCapturerAndroid)?.mediaProjection
             if (projection != null) {
                 audioCapture?.attachProjection(projection)
             } else {

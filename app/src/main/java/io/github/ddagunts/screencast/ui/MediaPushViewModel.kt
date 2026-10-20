@@ -15,6 +15,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 class MediaPushViewModel(app: Application) : AndroidViewModel(app) {
+    data class SharedSource(val id: Long, val source: String, val local: Boolean,
+                            val mime: String)
+    private val _shared = MutableStateFlow<SharedSource?>(null)
+    val shared: StateFlow<SharedSource?> = _shared
     private val discovery = DlnaDiscovery(app)
     private val _devices = MutableStateFlow<List<DlnaDevice>>(emptyList())
     val devices: StateFlow<List<DlnaDevice>> = _devices
@@ -24,6 +28,21 @@ class MediaPushViewModel(app: Application) : AndroidViewModel(app) {
     val serviceError = MediaPushService.errorFlow
 
     init { scan() }
+
+    fun acceptSharedIntent(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_SEND) return
+        val uri: Uri? = if (android.os.Build.VERSION.SDK_INT >= 33)
+            intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+        else @Suppress("DEPRECATION") intent.getParcelableExtra(Intent.EXTRA_STREAM)
+        if (uri != null && uri.scheme == "content") {
+            _shared.value = SharedSource(android.os.SystemClock.elapsedRealtimeNanos(),
+                uri.toString(), true, intent.type.orEmpty())
+            return
+        }
+        val url = intent.getStringExtra(Intent.EXTRA_TEXT)?.trim().orEmpty()
+        if (Uri.parse(url).scheme in listOf("http", "https"))
+            _shared.value = SharedSource(android.os.SystemClock.elapsedRealtimeNanos(), url, false, "")
+    }
 
     fun scan() {
         viewModelScope.launch {

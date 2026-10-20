@@ -52,6 +52,7 @@ class StartPermissionActivity : ComponentActivity() {
             return
         }
         val target = when (intent.getStringExtra(EXTRA_DESTINATION)) {
+            DESTINATION_AUTO -> AutoProjectionRequestActivity::class.java
             DESTINATION_HLS -> MediaProjectionRequestActivity::class.java
             DESTINATION_NATIVE -> NativeProjectionRequestActivity::class.java
             DESTINATION_WEBRTC -> WebRtcProjectionRequestActivity::class.java
@@ -79,5 +80,6 @@ class StartPermissionActivity : ComponentActivity() {
         const val DESTINATION_NATIVE = "native"
         const val DESTINATION_WEBRTC = "webrtc"
         const val DESTINATION_MEDIA = "media"
+        const val DESTINATION_AUTO = "auto"
     }
 }

@@ -18,6 +18,7 @@ import io.github.ddagunts.screencast.cast.launchMsg
 import io.github.ddagunts.screencast.cast.pingMsg
 import io.github.ddagunts.screencast.cast.pongMsg
 import io.github.ddagunts.screencast.media.ScreenCapture
+import io.github.ddagunts.screencast.MirrorProjectionService
 import io.github.ddagunts.screencast.media.PhoneMediaVolume
 import io.github.ddagunts.screencast.media.VideoEncoder
 import io.github.ddagunts.screencast.util.NetworkUtils
@@ -38,7 +39,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 
 internal class NativeCastSession(private val context: Context, val device: CastDevice,
-                                 private val audioOnly: Boolean = false) {
+                                 private val audioOnly: Boolean = false,
+                                 private val projectionLease: MirrorProjectionService.Lease? = null) {
     private data class App(val sessionId: String, val transportId: String)
 
     private val scope = CoroutineScope(Dispatchers.IO + Job())
@@ -62,7 +64,7 @@ internal class NativeCastSession(private val context: Context, val device: CastD
     @Volatile private var stopped = false
     private var activeAppId = ""
 
-    suspend fun start(resultCode: Int, projectionData: Intent, onProjectionStopped: () -> Unit) {
+    suspend fun start(resultCode: Int, projectionData: Intent?, onProjectionStopped: () -> Unit) {
         val cm = context.getSystemService(ConnectivityManager::class.java)
         val wifi = NetworkUtils.getWifiNetwork(context)
         if (wifi != null) cm?.bindProcessToNetwork(wifi)
@@ -90,7 +92,8 @@ internal class NativeCastSession(private val context: Context, val device: CastD
             app = target
             channel.send(connectMsg(target.transportId))
             _state.value = "NEGOTIATING"
-            val mp = createProjection(resultCode, projectionData, onProjectionStopped)
+            val mp = projectionLease?.projection ?: createProjection(resultCode,
+                projectionData ?: error("screen projection grant missing"), onProjectionStopped)
             audioEncoder = OpusPlaybackEncoder.prepare(context, mp)
             if (audioOnly && audioEncoder == null) error("playback audio capture is unavailable")
             val offeredAudio = audioEncoder != null
@@ -138,7 +141,7 @@ internal class NativeCastSession(private val context: Context, val device: CastD
                     targetDelayMs = minOf(CastStreamingProtocol.TARGET_DELAY_MS,
                         accepted.videoLimits?.maxDelayMs ?: CastStreamingProtocol.TARGET_DELAY_MS),
                     minBitRate = accepted.videoLimits?.minBitRate ?: 300_000)
-                initialBitrate = minOf(stream!!.bitRate, maxOf(3_000_000, profile.minBitrate))
+                initialBitrate = CastVideoQuality.initialBitrate(stream!!, profile)
                 logI("Native Cast: negotiated ${profile.width}x${profile.height}@${profile.fps}, " +
                     "bitrate ${stream!!.bitRate}, receiver limits ${accepted.videoLimits}")
             }
@@ -157,7 +160,14 @@ internal class NativeCastSession(private val context: Context, val device: CastD
                 onCapturePaused = { paused ->
                     runCatching {
                         synchronized(qualityLock) {
-                            capture?.setPaused(paused)
+                            if (projectionLease != null) {
+                                if (paused) projectionLease.detach()
+                                else encoder?.let { video ->
+                                    activeProfile?.let { profile ->
+                                        projectionLease.attach(video.inputSurface, captureSize(profile))
+                                    }
+                                }
+                            } else capture?.setPaused(paused)
                             if (!paused) encoder?.requestKeyFrame()
                         }
                     }.onFailure { fail("capture flow control failed: ${it.message}") }
@@ -232,8 +242,12 @@ internal class NativeCastSession(private val context: Context, val device: CastD
         val profile = activeProfile ?: error("capture profile was not selected")
         val video = createVideoEncoder(profile, initialBitrate)
         encoder = video
-        capture = ScreenCapture(context).also {
-            it.start(mp, video.inputSurface, captureSize(profile))
+        if (projectionLease != null) {
+            projectionLease.attach(video.inputSurface, captureSize(profile))
+        } else {
+            capture = ScreenCapture(context).also {
+                it.start(mp, video.inputSurface, captureSize(profile))
+            }
         }
         logI("Native Cast: projection captured for Cast Streaming")
     }
@@ -268,16 +282,18 @@ internal class NativeCastSession(private val context: Context, val device: CastD
                 mediaSender.videoBitrate) ?: continue
             runCatching {
                 synchronized(qualityLock) {
-                    val display = capture ?: error("capture stopped")
-                    display.setPaused(true)
+                    val display = capture
+                    if (projectionLease == null && display == null) error("capture stopped")
+                    if (projectionLease != null) projectionLease.detach() else display!!.setPaused(true)
                     mediaSender.resetVideoForFormatChange()
                     encoder?.stop()
                     val video = createVideoEncoder(next,
                         minOf(mediaSender.videoBitrate, next.bitrate))
                     encoder = video
-                    display.replaceSurface(video.inputSurface, captureSize(next))
+                    if (projectionLease != null) projectionLease.attach(video.inputSurface, captureSize(next))
+                    else display!!.replaceSurface(video.inputSurface, captureSize(next))
                     activeProfile = next
-                    display.setPaused(false)
+                    if (projectionLease == null) display!!.setPaused(false)
                     video.requestKeyFrame()
                     logI("Native Cast: adapted capture to ${next.width}x${next.height}@${next.fps}")
                 }
@@ -353,7 +369,9 @@ internal class NativeCastSession(private val context: Context, val device: CastD
         runCatching { audioEncoder?.stop() }; audioEncoder = null
         PhoneMediaVolume.restore(context, this)
         synchronized(qualityLock) {
-            runCatching { capture?.stop() }; capture = null
+            if (projectionLease != null) runCatching { projectionLease?.detach() }
+            else runCatching { capture?.stop() }
+            capture = null
             runCatching { encoder?.stop() }; encoder = null
         }
         runCatching { sender?.stop() }; sender = null

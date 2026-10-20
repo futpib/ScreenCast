@@ -231,7 +231,9 @@ internal class CastStreamingSender(
                     if (it >= 0) stream.acknowledged = true
                     if (videoStream != null && stream == videoStream && it > stream.checkpoint) {
                         val now = System.nanoTime() / 1_000_000
-                        rateController?.onCheckpoint(now, it - stream.checkpoint)
+                        val sentAt = stream.history.lastOrNull { frame -> frame.id <= it }?.sentAtMs
+                        rateController?.onCheckpoint(now, it - stream.checkpoint,
+                            sentAt?.let { time -> now - time })
                         inFlightController.onCheckpoint(now)
                     }
                     stream.checkpoint = maxOf(stream.checkpoint, it)

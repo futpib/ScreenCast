@@ -19,6 +19,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,10 +37,19 @@ fun MediaPushScreen(vm: MediaPushViewModel, castVm: CastViewModel, advanced: Boo
     val session by vm.session.collectAsStateWithLifecycle()
     val error by vm.error.collectAsStateWithLifecycle()
     val serviceError by vm.serviceError.collectAsStateWithLifecycle()
+    val shared by vm.shared.collectAsStateWithLifecycle()
     var fileUri by remember { mutableStateOf<String?>(null) }
     var fileName by remember { mutableStateOf<String?>(null) }
     var url by remember { mutableStateOf("") }
     var mime by remember { mutableStateOf("") }
+    LaunchedEffect(shared?.id) {
+        shared?.let {
+            fileUri = if (it.local) it.source else null
+            fileName = if (it.local) android.net.Uri.parse(it.source).lastPathSegment else null
+            url = if (it.local) "" else it.source
+            mime = it.mime
+        }
+    }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             context.contentResolver.takePersistableUriPermission(uri,
