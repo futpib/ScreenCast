@@ -18,6 +18,53 @@ import java.util.concurrent.TimeUnit
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class CastStreamingSenderTest {
+    @Test fun firstFrameSendsClockMappingBeforeMedia() {
+        DatagramSocket(0, InetAddress.getLoopbackAddress()).use { receiver ->
+            receiver.soTimeout = 3_000
+            val stream = CastStreamingProtocol.VideoStream(
+                0x12345678, ByteArray(16), ByteArray(16), 1280, 720, 30, 3_000_000)
+            val sender = CastStreamingSender("127.0.0.1", receiver.localPort, stream) {}
+            try {
+                sender.start()
+                sender.sendVideo(byteArrayOf(1, 2, 3), 1_000_000, true)
+                val report = DatagramPacket(ByteArray(1500), 1500)
+                receiver.receive(report)
+                assertEquals(200, report.data[1].toInt() and 0xff)
+                assertEquals(stream.ssrc, readInt(report.data, 4))
+                assertEquals(90_000, readInt(report.data, 16))
+                receiveRtp(receiver)
+            } finally {
+                sender.stop()
+            }
+        }
+    }
+
+    @Test fun queueOverflowWaitsForKeyFrameBeforeSendingMoreVideo() {
+        DatagramSocket(0, InetAddress.getLoopbackAddress()).use { receiver ->
+            receiver.soTimeout = 1_000
+            val stream = CastStreamingProtocol.VideoStream(
+                0x12345678, ByteArray(16), ByteArray(16), 1280, 720, 30, 3_000_000)
+            val keyFrameRequested = CountDownLatch(1)
+            val sender = CastStreamingSender("127.0.0.1", receiver.localPort, stream) {
+                keyFrameRequested.countDown()
+            }
+            try {
+                sender.sendVideo(byteArrayOf(1), 1_000_000, true)
+                repeat(8) { sender.sendVideo(byteArrayOf(2), 1_033_333L + it * 33_333L, false) }
+                sender.sendVideo(byteArrayOf(3), 1_300_000, false)
+                sender.sendVideo(byteArrayOf(4), 1_333_333, true)
+                sender.start()
+                assertTrue(keyFrameRequested.await(1, TimeUnit.SECONDS))
+                val packet = receiveRtp(receiver)
+                assertTrue(packet.data[12].toInt() and 0x80 != 0)
+                receiver.soTimeout = 200
+                assertTrue(runCatching { receiveRtp(receiver) }.isFailure)
+            } finally {
+                sender.stop()
+            }
+        }
+    }
+
     @Test fun retransmitsNackedPacketAndRequestsKeyFrameOnPli() {
         DatagramSocket(0, InetAddress.getLoopbackAddress()).use { receiver ->
             receiver.soTimeout = 3_000
@@ -75,6 +122,36 @@ class CastStreamingSenderTest {
                 assertEquals(packets[96]!!.port, packets[127]!!.port)
                 assertEquals(90_000, readInt(packets[96]!!.data, 4))
                 assertEquals(48_000, readInt(packets[127]!!.data, 4))
+            } finally {
+                sender.stop()
+            }
+        }
+    }
+
+    @Test fun audioPacketsAreInterleavedWithLargeVideoFrames() {
+        DatagramSocket(0, InetAddress.getLoopbackAddress()).use { receiver ->
+            receiver.soTimeout = 3_000
+            val video = CastStreamingProtocol.VideoStream(
+                0x12345678, ByteArray(16), ByteArray(16), 1280, 720, 30, 3_000_000)
+            val audio = CastStreamingProtocol.AudioStream(
+                0x55667788, ByteArray(16), ByteArray(16))
+            val sender = CastStreamingSender("127.0.0.1", receiver.localPort, video, audio) {}
+            try {
+                sender.start()
+                sender.sendVideo(ByteArray(300_000) { it.toByte() }, 1_000_000, true)
+                receiveRtp(receiver)
+                sender.sendAudio(byteArrayOf(1, 2, 3), 1_010_000)
+                var sawAudio = false
+                var sawLastVideoPacket = false
+                while (!sawLastVideoPacket) {
+                    val packet = DatagramPacket(ByteArray(1500), 1500)
+                    receiver.receive(packet)
+                    when (packet.data[1].toInt() and 0x7f) {
+                        127 -> sawAudio = true
+                        96 -> if (packet.data[1].toInt() and 0x80 != 0) sawLastVideoPacket = true
+                    }
+                }
+                assertTrue(sawAudio)
             } finally {
                 sender.stop()
             }

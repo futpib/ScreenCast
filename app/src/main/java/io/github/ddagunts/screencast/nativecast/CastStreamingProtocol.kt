@@ -212,13 +212,15 @@ internal object CastStreamingProtocol {
     }
 
     data class Nack(val frameId: Long, val packetId: Int)
-    data class Feedback(val checkpoint: Long?, val nacks: List<Nack>, val pictureLoss: Boolean)
+    data class Feedback(val checkpoint: Long?, val nacks: List<Nack>, val pictureLoss: Boolean,
+                        val targetDelayMs: Int?)
 
     fun feedback(data: ByteArray, senderSsrc: Int, checkpointHint: Long): Feedback {
         var offset = 0
         var checkpoint: Long? = null
         val nacks = ArrayList<Nack>()
         var pictureLoss = false
+        var targetDelayMs: Int? = null
         while (offset + 4 <= data.size) {
             val header = ByteBuffer.wrap(data, offset, 4).order(ByteOrder.BIG_ENDIAN)
             val flags = header.get().toInt() and 0xff
@@ -231,6 +233,8 @@ internal object CastStreamingProtocol {
                 if (subtype == 15 && size >= 20 && readInt(data, offset + 12) == 0x43415354) {
                     val cp = expandFrameId(data[offset + 16].toInt() and 0xff, checkpointHint)
                     checkpoint = maxOf(checkpoint ?: Long.MIN_VALUE, cp)
+                    targetDelayMs = ((data[offset + 18].toInt() and 0xff) shl 8) or
+                        (data[offset + 19].toInt() and 0xff)
                     val losses = data[offset + 17].toInt() and 0xff
                     for (i in 0 until minOf(losses, (size - 20) / 4)) {
                         val at = offset + 20 + 4 * i
@@ -245,7 +249,7 @@ internal object CastStreamingProtocol {
             }
             offset += size
         }
-        return Feedback(checkpoint, nacks, pictureLoss)
+        return Feedback(checkpoint, nacks, pictureLoss, targetDelayMs)
     }
 
     private fun expandFrameId(low: Int, reference: Long): Long {

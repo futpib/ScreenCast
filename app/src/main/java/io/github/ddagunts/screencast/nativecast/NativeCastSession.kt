@@ -99,7 +99,9 @@ internal class NativeCastSession(private val context: Context, val device: CastD
                 audioEncoder = null
             }
             val mediaSender = CastStreamingSender(device.host, accepted.port, stream,
-                if (accepted.audioAccepted) audioStream else null) { encoder?.requestKeyFrame() }
+                if (accepted.audioAccepted) audioStream else null,
+                onPictureLoss = { encoder?.requestKeyFrame() },
+                onBitrateChange = { encoder?.setBitrate(it) })
             sender = mediaSender
             mediaSender.start()
             startCapture(mp)

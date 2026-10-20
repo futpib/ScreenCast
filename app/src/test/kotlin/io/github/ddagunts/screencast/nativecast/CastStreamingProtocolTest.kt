@@ -135,6 +135,7 @@ class CastStreamingProtocolTest {
             .putInt(99).putInt(stream.ssrc).array()
         val result = CastStreamingProtocol.feedback(feedback + pli, stream.ssrc, -1)
         assertEquals(-1L, result.checkpoint)
+        assertEquals(200, result.targetDelayMs)
         assertEquals(listOf(4, 5, 7), result.nacks.map { it.packetId })
         assertTrue(result.pictureLoss)
         assertFalse(CastStreamingProtocol.feedback(feedback, 123, -1).nacks.isNotEmpty())

@@ -6,6 +6,15 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Changed
+- Native Cast mirroring now paces video packets, interleaves audio during large
+  frames, adjusts video bitrate from RTCP feedback, and stops retransmitting
+  frames after the receiver's playout window plus a recovery margin.
+
+### Fixed
+- Native Cast now discards dependent video frames after a local send-queue
+  overflow and resumes with a fresh keyframe.
+
 ### Added
 - Media mode for direct file or URL playback through the stock Cast receiver
   or a DLNA MediaRenderer. Local files are served from the phone with HTTP

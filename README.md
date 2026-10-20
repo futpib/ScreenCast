@@ -47,13 +47,19 @@ default Cast Streaming receiver `0F5096E8` as a fallback), negotiates a
 Cast Streaming `OFFER`/`ANSWER`, and sends H.264 video and Opus playback audio
 as encrypted Cast RTP over UDP. Both streams share one UDP socket. The app
 handles RTCP sender reports, acknowledgements, retransmissions, and keyframe
-requests. It uses neither the HLS playlist nor the custom WebRTC receiver. It
-casts to one device at a time. Playback audio capture requires Android 10+ and
+requests. It paces video packets, gives audio slots during large video frames,
+and adjusts the H.264 bitrate from acknowledgement progress, loss, and frames
+stalled in transit. When its video queue overflows, it waits for a keyframe so
+it does not send frames that depend on a locally dropped frame. It skips
+retransmissions older than the receiver's target delay plus 250 ms. It uses
+neither the HLS playlist nor the custom WebRTC receiver. It casts to one device
+at a time. Playback audio capture requires Android 10+ and
 the audio permission. A bundled libopus encoder produces 10 ms audio packets.
 If audio capture is unavailable or the receiver declines it, the app sends video
 only. Android's playback capture rules limit which apps' sound can be captured.
 The receiver's target playout delay is 200 ms; actual latency depends on the
-device and network. Audio and video were tested against a stock MiTV-MOEU0 receiver.
+device and network. The earlier audio and video sender was tested against a
+stock MiTV-MOEU0 receiver; the adaptive sender still needs a TV regression test.
 The bundled [Opus 1.5.2 source](app/src/main/cpp/opus) is licensed under its
 [BSD license](app/src/main/cpp/opus/COPYING).
 

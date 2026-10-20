@@ -25,7 +25,8 @@ class VideoEncoder(
 
     private lateinit var codec: MediaCodec
     lateinit var inputSurface: Surface; private set
-    private var running = false
+    @Volatile private var running = false
+    private var currentBitrate = bitrate
     private var sink: Sink? = null
     private var drainThread: Thread? = null
     private var syncThread: Thread? = null
@@ -71,6 +72,17 @@ class VideoEncoder(
         runCatching {
             codec.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) })
         }
+    }
+
+    fun setBitrate(bitsPerSecond: Int) {
+        if (!running || bitsPerSecond == currentBitrate) return
+        runCatching {
+            codec.setParameters(Bundle().apply {
+                putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, bitsPerSecond)
+            })
+            currentBitrate = bitsPerSecond
+            logI("encoder bitrate changed to $bitsPerSecond")
+        }.onFailure { logW("encoder bitrate change failed: $it") }
     }
 
     // KEY_I_FRAME_INTERVAL is a *hint* and vendor encoders miss it by up to a
