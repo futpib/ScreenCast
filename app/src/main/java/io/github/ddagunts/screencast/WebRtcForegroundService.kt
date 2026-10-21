@@ -120,10 +120,10 @@ class WebRtcForegroundService : Service() {
             // Observe state and mirror to the global flow so the UI can see it.
             launch {
                 s.state.collect { st ->
+                    if (st is WebRtcState.Idle) return@collect
                     val currentVol = _session.value?.volume
                         ?: io.github.ddagunts.screencast.cast.CastVolume()
                     _session.value = when (st) {
-                        is WebRtcState.Idle -> null
                         is WebRtcState.Connecting -> SessionSnapshot(device, "CONNECTING", volume = currentVol)
                         is WebRtcState.Launching -> SessionSnapshot(device, "LAUNCHING", volume = currentVol)
                         is WebRtcState.Signaling -> SessionSnapshot(device, "SIGNALING", volume = currentVol)
