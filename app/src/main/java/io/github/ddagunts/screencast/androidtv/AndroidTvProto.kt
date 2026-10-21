@@ -735,13 +735,18 @@ sealed class RemoteMessage {
         // Decode the envelope: read the first set submessage field and
         // dispatch on its number. Anything else (including the IME pushes
         // we deliberately don't model) returns Unknown(field).
-        fun decode(bytes: ByteArray): RemoteMessage {
-            var result: RemoteMessage = Unknown(0)
+        fun decode(bytes: ByteArray): RemoteMessage =
+            decodeAll(bytes).let { messages ->
+                messages.firstOrNull { it !is Unknown } ?: messages.firstOrNull() ?: Unknown(0)
+            }
+
+        fun decodeAll(bytes: ByteArray): List<RemoteMessage> {
+            val result = mutableListOf<RemoteMessage>()
             forEachField(bytes) { field, wire, src, off ->
                 if (wire != 2) return@forEachField skipField(src, off, wire)
                 val (inner, next) = readBytes(src, off)
-                if (result is Unknown) {
-                    result = when (field) {
+                run {
+                    result += when (field) {
                         FIELD_CONFIGURE -> decodeConfigure(inner)
                         FIELD_SET_ACTIVE -> decodeSetActive(inner)
                         FIELD_PING_REQUEST -> decodePingRequest(inner)

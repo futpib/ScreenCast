@@ -98,11 +98,24 @@ class AndroidTvRemote(
             scope.launch { newSession.imePrompt.collect { _imePrompt.value = it } }
         }
         s.connect()
+        _state.value = s.state.value
         logI("AndroidTvRemote.connect() returned, session state = ${s.state.value}")
     }
 
+    suspend fun resume() { session?.resume() }
+
     fun disconnect() {
         session?.disconnect()
+        _state.value = AndroidTvState.Idle
+    }
+
+    fun close() {
+        session?.close()
+        session = null
+        pipeScope?.cancel()
+        pipeScope = null
+        _state.value = AndroidTvState.Idle
+        _imePrompt.value = null
     }
 
     // Forget the pairing for this TV (locally only — the TV still
@@ -110,11 +123,8 @@ class AndroidTvRemote(
     // happens after ~10 new clients pair). The next connect() call will
     // refuse; the next pair() will issue a fresh server-cert pin.
     fun unpair() {
-        disconnect()
+        close()
         certStore.forget(device.host)
-        pipeScope?.cancel()
-        pipeScope = null
-        session = null
     }
 
     suspend fun sendKey(key: AndroidTvKey) { session?.sendKey(key) }

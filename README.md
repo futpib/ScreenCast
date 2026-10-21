@@ -175,6 +175,8 @@ Choose **Control my TV** to use the app as a remote for an Android TV / Google T
 - **Discovery**: `NsdManager` finds TVs via mDNS (`_androidtvremote2._tcp.local`) — independent of the Chromecast discovery used by the cast modes.
 - **Pairing (one-time)**: TLS connect to port 6467, then a 6-step polo handshake (request → options → configuration → ack → secret → ack). The TV displays a 6-digit hex code on screen; you type it into the dialog on the phone. The app generates a per-install RSA-2048 client cert (no BouncyCastle — hand-rolled X.509 v3 DER) and stores it under [androidx.security `EncryptedFile`](https://developer.android.com/topic/security/data) with a Keystore-derived AES-256-GCM master key. The TV's server cert SHA-256 is pinned in app-private SharedPreferences for subsequent connections.
 - **Control channel**: mTLS to port 6466 using the paired client cert + server pin. Sends `RemoteKeyInject` for D-pad / nav / media-transport keys, replies to the TV's keepalive `RemotePingRequest` from inside the read loop, and mirrors `RemoteSetVolumeLevel` pushes into a Compose `StateFlow` so the volume readout follows physical-remote presses live.
+- **Phone app switching**: the selected remote automatically retries failed or stale connections when you return. Transport drops use one retry loop; manual disconnect stops it. Saved TVs remain selectable while discovery catches up.
+- **Optional remote notification**: turn on **Remote notification** on the connected remote screen. It keeps the connection in a foreground service and offers **Play / pause** and **Disconnect** without opening ScreenCast. It is off by default, requires notification permission, and disappears on disconnect or a terminal connection failure. Turning the option off removes the notification while the open app retains its connection.
 - **Settings shortcut**: maps to long-press Home (which on Sony BRAVIA opens the Action Menu where Settings lives), since `KEYCODE_SETTINGS` itself goes unbound on Sony firmware.
 - **Re-pair after a TV factory reset**: tap **Forget** on the row in the Remote picker, then re-pair from scratch — the TV's new server cert is pinned on the new SECRET_ACK exchange.
 
@@ -194,7 +196,8 @@ WebRTC asks only when its Audio option is enabled. In that mode, the bundled
 WebRTC audio engine also reads microphone input, then the app replaces those
 samples with captured playback audio before encoding. Declining audio access
 leaves mirroring video-only or silent.
-Declining notification access does not block casting. A separate Android
+The optional remote notification also asks for notification permission when enabled.
+Declining notification access does not block casting or in-app remote controls. A separate Android
 screen-capture consent prompt appears for each mirroring session.
 
 Choosing a local file in Media mode uses Android's document picker, which

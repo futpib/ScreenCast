@@ -8,6 +8,18 @@ import org.junit.Test
 import java.io.ByteArrayOutputStream
 
 class AndroidTvProtoTest {
+    @Test fun `combined status and ping envelope preserves every message`() {
+        val volume = RemoteMessage.SetVolumeLevel("TV", 5, 20, false)
+        val ping = RemoteMessage.PingRequest(123)
+        assertEquals(listOf(volume, ping), RemoteMessage.decodeAll(volume.encode() + ping.encode()))
+    }
+
+    @Test fun `unknown extension does not hide later activation request`() {
+        val activate = RemoteMessage.SetActive(615)
+        val frame = encodeUnknownBytesField(99, byteArrayOf(8, 1)) + activate.encode()
+        assertEquals(listOf(RemoteMessage.Unknown(99), activate), RemoteMessage.decodeAll(frame))
+    }
+
 
     @Test fun `OuterMessage with PairingRequest roundtrips through encode and decode`() {
         val msg = OuterMessage.pairingRequest(PairingRequest("androidtvremote2", "ScreenCast"))

@@ -1,5 +1,14 @@
 package io.github.ddagunts.screencast.ui
 
+import android.Manifest
+import android.content.Intent
+import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.app.NotificationManagerCompat
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.compose.material3.Switch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -78,6 +87,16 @@ import io.github.ddagunts.screencast.androidtv.AndroidTvVolume
 //     selected.
 @Composable
 fun AndroidTvRemoteScreen(vm: AndroidTvViewModel) {
+    val notificationEnabled by vm.notificationEnabled.collectAsStateWithLifecycle()
+    val notificationError by vm.notificationError.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) vm.setNotificationEnabled(true) else vm.notificationPermissionDenied()
+    }
+    LifecycleResumeEffect(Unit) {
+        vm.resumeCurrent()
+        onPauseOrDispose { }
+    }
     val discovered by vm.discovered.collectAsStateWithLifecycle()
     val manualHosts by vm.manualHosts.collectAsStateWithLifecycle()
     val paired by vm.paired.collectAsStateWithLifecycle()
@@ -99,7 +118,7 @@ fun AndroidTvRemoteScreen(vm: AndroidTvViewModel) {
             onRemoveManual = { vm.removeManualHost(it) },
         )
     } else {
-        val device = discovered.firstOrNull { it.host == currentHost } ?: paired
+        val device = vm.selectedDevice() ?: discovered.firstOrNull { it.host == currentHost } ?: paired
             .firstOrNull { it.host == currentHost }
             ?.let {
                 AndroidTvDevice(
@@ -110,7 +129,18 @@ fun AndroidTvRemoteScreen(vm: AndroidTvViewModel) {
             device = device,
             state = state,
             volume = volume,
-            onBack = { vm.disconnectCurrent(); vm.selectDevice(device) /* no-op shortcut */ },
+            notificationEnabled = notificationEnabled,
+            notificationError = notificationError,
+            onNotificationChange = { enabled ->
+                if (!enabled) vm.setNotificationEnabled(false)
+                else if (NotificationManagerCompat.from(context).areNotificationsEnabled()) vm.setNotificationEnabled(true)
+                else if (Build.VERSION.SDK_INT >= 33) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                else vm.notificationPermissionDenied()
+            },
+            onNotificationSettings = {
+                context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName))
+            },
             onLeave = { vm.leaveCurrent() },
             onKey = { vm.sendKey(it) },
             onKeyDown = { vm.keyDown(it) },
@@ -205,15 +235,18 @@ private fun DevicePicker(
                 }
             }
         }
-        // Devices we paired previously but aren't currently visible —
-        // still listed so the user can forget them, but no tap target
-        // until mDNS rediscovers them.
+        // mDNS can lag behind Wi-Fi resume. Allow connecting by the saved IP.
         val orphanedPaired = paired.filterNot { it.host in discovered.map { d -> d.host } }
         if (orphanedPaired.isNotEmpty()) {
-            Text("Paired (offline)", style = MaterialTheme.typography.titleSmall)
+            Text("Saved TVs", style = MaterialTheme.typography.titleSmall)
             Card(Modifier.fillMaxWidth()) {
                 orphanedPaired.forEach { e ->
                     ListItem(
+                        modifier = Modifier.pointerInput(e.host) {
+                            detectTapGestures(onTap = {
+                                onSelect(AndroidTvDevice(e.name, e.host, modelName = e.model, bleMac = e.bleMac))
+                            })
+                        },
                         headlineContent = { Text(e.name) },
                         supportingContent = { Text(e.host) },
                         trailingContent = {
@@ -242,7 +275,10 @@ private fun RemoteScreenBody(
     device: AndroidTvDevice,
     state: AndroidTvState,
     volume: AndroidTvVolume,
-    onBack: () -> Unit,
+    notificationEnabled: Boolean,
+    notificationError: String?,
+    onNotificationChange: (Boolean) -> Unit,
+    onNotificationSettings: () -> Unit,
     onLeave: () -> Unit,
     onKey: (AndroidTvKey) -> Unit,
     onKeyDown: (AndroidTvKey) -> Unit,
@@ -260,6 +296,18 @@ private fun RemoteScreenBody(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Header(device = device, state = state, onLeave = onLeave, onConnect = onConnect)
+
+        Card(Modifier.fillMaxWidth()) {
+            ListItem(
+                headlineContent = { Text("Remote notification") },
+                supportingContent = { Text("Keep connected and play/pause without opening ScreenCast") },
+                trailingContent = { Switch(checked = notificationEnabled, onCheckedChange = onNotificationChange) },
+            )
+            notificationError?.let {
+                Text(it, modifier = Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error)
+                TextButton(onClick = onNotificationSettings) { Text("Notification settings") }
+            }
+        }
 
         DPad(onKey = onKey)
 
@@ -290,6 +338,8 @@ private fun Header(
                 Text(device.name, style = MaterialTheme.typography.titleMedium)
                 Text(device.host, style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (state is AndroidTvState.Error) Text(state.message,
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
             StatusChip(state = state)
             if (state is AndroidTvState.Idle || state is AndroidTvState.Error) {

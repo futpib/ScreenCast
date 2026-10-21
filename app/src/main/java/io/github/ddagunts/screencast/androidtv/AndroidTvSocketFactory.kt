@@ -40,14 +40,25 @@ class AndroidTvSocketFactory(
     private val expectedServerCertSha256: String? = null,
 ) {
 
-    fun connect(host: String, port: Int, timeoutMs: Int = CONNECT_TIMEOUT_MS): SSLSocket {
+    fun connect(
+        host: String, port: Int, timeoutMs: Int = CONNECT_TIMEOUT_MS,
+        onSocket: (SSLSocket) -> Unit = {},
+    ): SSLSocket {
         val factory = buildFactory()
         val socket = factory.createSocket() as SSLSocket
-        socket.connect(java.net.InetSocketAddress(host, port), timeoutMs)
-        socket.startHandshake()
-        verifyServerCert(socket, host)
-        logI("ATV TLS connected to $host:$port")
-        return socket
+        try {
+            onSocket(socket)
+            socket.soTimeout = timeoutMs
+            socket.connect(java.net.InetSocketAddress(host, port), timeoutMs)
+            socket.startHandshake()
+            verifyServerCert(socket, host)
+            socket.soTimeout = 0
+            logI("ATV TLS connected to $host:$port")
+            return socket
+        } catch (e: Exception) {
+            runCatching { socket.close() }
+            throw e
+        }
     }
 
     // After the handshake, look at the leaf cert the TV presented and

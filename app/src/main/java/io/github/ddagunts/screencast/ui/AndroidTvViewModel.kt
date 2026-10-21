@@ -1,9 +1,11 @@
 package io.github.ddagunts.screencast.ui
 
 import android.app.Application
+import io.github.ddagunts.screencast.AndroidTvRemoteService
+import io.github.ddagunts.screencast.androidtv.AndroidTvRemotes
+import io.github.ddagunts.screencast.androidtv.AndroidTvRemotePreferences
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import io.github.ddagunts.screencast.androidtv.AndroidTvCertStore
 import io.github.ddagunts.screencast.androidtv.AndroidTvDevice
 import io.github.ddagunts.screencast.androidtv.AndroidTvDiscovery
 import io.github.ddagunts.screencast.androidtv.AndroidTvImePrompt
@@ -51,7 +53,13 @@ class AndroidTvViewModel(app: Application) : AndroidViewModel(app) {
         _manualHosts.value = manualStore.remove(host)
     }
 
-    private val certStore = AndroidTvCertStore(app)
+    private val preferences = AndroidTvRemotePreferences(app)
+    private val _notificationEnabled = MutableStateFlow(preferences.notificationEnabled)
+    val notificationEnabled: StateFlow<Boolean> = _notificationEnabled
+    private val _notificationError = MutableStateFlow<String?>(null)
+    val notificationError: StateFlow<String?> = _notificationError
+
+    init { AndroidTvRemotes.acquireUi() }
     private val persistence = AndroidTvPersistence(app)
 
     private val _paired = MutableStateFlow(persistence.list())
@@ -60,8 +68,8 @@ class AndroidTvViewModel(app: Application) : AndroidViewModel(app) {
     // One AndroidTvRemote per host. Keeping these alive across screen
     // toggles avoids having to re-handshake every time the user pops back
     // into the remote screen — most users will toggle in/out frequently.
-    // We only tear them down when the VM is cleared.
-    private val remotes = mutableMapOf<String, AndroidTvRemote>()
+    // The optional notification can retain a connection after the VM clears.
+    private val remotes = AndroidTvRemotes
 
     private val _currentHost = MutableStateFlow<String?>(null)
     val currentHost: StateFlow<String?> = _currentHost
@@ -96,6 +104,7 @@ class AndroidTvViewModel(app: Application) : AndroidViewModel(app) {
         currentJobs?.cancel()
         _currentHost.value = device.host
         val remote = remoteFor(device)
+        showNotification(remote)
         // Seed the surfaced fields from the remote's current values so the
         // UI sees the right state immediately, before the new collectors
         // have a chance to emit.
@@ -125,7 +134,7 @@ class AndroidTvViewModel(app: Application) : AndroidViewModel(app) {
             if (result.isSuccess) {
                 persistence.upsert(device)
                 _paired.value = persistence.list()
-                runCatching { remote.connect() }
+                selectDevice(device)
             }
         }
     }
@@ -149,21 +158,23 @@ class AndroidTvViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun unpair(host: String) {
-        val r = remotes.remove(host) ?: return
-        r.unpair()
+        if (AndroidTvRemotes.notificationRemote.value?.device?.host == host) {
+            AndroidTvRemoteService.hide(getApplication())
+        }
+        remotes.forget(getApplication(), host)
         // Find the persistence entry for this host (key may be a BLE MAC
         // rather than the host string) so we can forget by stable key.
         _paired.value.firstOrNull { it.host == host }?.let { persistence.forget(it.key) }
         _paired.value = persistence.list()
         if (_currentHost.value == host) {
-            _currentHost.value = null
-            _currentState.value = AndroidTvState.Idle
+            leaveCurrent()
         }
     }
 
     fun connectCurrent() {
         val host = _currentHost.value ?: return
         val remote = remotes[host] ?: return
+        showNotification(remote)
         viewModelScope.launch { runCatching { remote.connect() } }
     }
 
@@ -258,15 +269,45 @@ class AndroidTvViewModel(app: Application) : AndroidViewModel(app) {
         remotes[host]?.closeImePrompt()
     }
 
+    fun selectedDevice(): AndroidTvDevice? = _currentHost.value?.let { remotes[it]?.device }
+
     private fun remoteFor(device: AndroidTvDevice): AndroidTvRemote =
-        remotes.getOrPut(device.host) {
-            AndroidTvRemote(getApplication(), device, certStore)
-        }
+        remotes.getOrCreate(getApplication(), device)
+
+    fun setNotificationEnabled(enabled: Boolean) {
+        preferences.notificationEnabled = enabled
+        _notificationEnabled.value = enabled
+        _notificationError.value = null
+        if (!enabled) AndroidTvRemoteService.hide(getApplication())
+        else _currentHost.value?.let { remotes[it]?.let(::showNotification) }
+    }
+
+    fun notificationPermissionDenied() {
+        _notificationError.value = "Allow ScreenCast notifications in Android settings to use remote controls here."
+    }
+
+    private fun showNotification(remote: AndroidTvRemote) {
+        if (!_notificationEnabled.value || !remote.isPaired) return
+        runCatching { AndroidTvRemoteService.show(getApplication(), remote.device) }
+            .onFailure {
+                _notificationError.value = "Could not show remote controls: ${it.message}"
+                logE("Remote notification failed", it)
+            }
+    }
+
+    fun resumeCurrent() {
+        val remote = _currentHost.value?.let { remotes[it] } ?: return
+        viewModelScope.launch { remote.resume() }
+        if (_notificationEnabled.value && remote.state.value !is AndroidTvState.Idle) showNotification(remote)
+    }
+
+    fun openNotificationRemote() {
+        AndroidTvRemotes.notificationRemote.value?.let { selectDevice(it.device) }
+    }
 
     override fun onCleared() {
         discovery.stop()
-        remotes.values.forEach { runCatching { it.disconnect() } }
-        remotes.clear()
+        remotes.releaseUi()
         super.onCleared()
     }
 }

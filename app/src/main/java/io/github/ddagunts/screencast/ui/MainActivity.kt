@@ -53,6 +53,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.ddagunts.screencast.AndroidTvRemoteService
 import io.github.ddagunts.screencast.CastMode
 import io.github.ddagunts.screencast.media.PhoneMediaVolume
 
@@ -65,13 +66,24 @@ class MainActivity : ComponentActivity() {
     private val mediaVm: MediaPushViewModel by viewModels()
     private val mirrorVm: MirrorIntentViewModel by viewModels()
 
+    private var remoteOpenRequest by mutableStateOf(0)
+
+    private fun acceptRemoteIntent(intent: Intent) {
+        if (intent.action == AndroidTvRemoteService.ACTION_OPEN) {
+            atvVm.openNotificationRemote()
+            remoteOpenRequest++
+            intent.action = null
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         PhoneMediaVolume.restoreStale(this)
         mediaVm.acceptSharedIntent(intent)
+        acceptRemoteIntent(intent)
         setContent {
             ScreenCastTheme {
-                Surface(Modifier.fillMaxSize()) { AppScaffold(vm, webRtcVm, atvVm, nativeVm, mediaVm, mirrorVm) }
+                Surface(Modifier.fillMaxSize()) { AppScaffold(vm, webRtcVm, atvVm, nativeVm, mediaVm, mirrorVm, remoteOpenRequest) }
             }
         }
     }
@@ -80,6 +92,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         mediaVm.acceptSharedIntent(intent)
+        acceptRemoteIntent(intent)
     }
 }
 
@@ -122,9 +135,13 @@ private fun AppScaffold(
     nativeVm: NativeCastViewModel,
     mediaVm: MediaPushViewModel,
     mirrorVm: MirrorIntentViewModel,
+    remoteOpenRequest: Int,
 ) {
     var screen by rememberSaveable { mutableStateOf(Screen.Home) }
     var openedShareId by rememberSaveable { mutableStateOf(0L) }
+    LaunchedEffect(remoteOpenRequest) {
+        if (remoteOpenRequest > 0) screen = Screen.Remote
+    }
     val shared by mediaVm.shared.collectAsStateWithLifecycle()
     LaunchedEffect(shared?.id) {
         shared?.let {
