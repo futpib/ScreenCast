@@ -28,6 +28,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -39,6 +40,18 @@ class MediaPushService : Service() {
     data class Snapshot(val target: String, val protocol: String, val title: String, val status: String)
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val commands = Channel<String>(Channel.UNLIMITED)
+    private val commandJob = scope.launch {
+        for (action in commands) {
+            when (action) {
+                ACTION_PAUSE -> control("Pause requested") { cast?.pause() ?: dlna?.pause() }
+                ACTION_PLAY -> control("Play requested") { cast?.play() ?: dlna?.play() }
+                ACTION_STOP -> {
+                    try { stopSession() } finally { stopSelf() }
+                }
+            }
+        }
+    }
     private var cast: CastSession? = null
     private var dlna: DlnaClient? = null
     private var server: LocalMediaServer? = null
@@ -57,19 +70,16 @@ class MediaPushService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> if (!active) start(intent)
-            ACTION_STOP -> scope.launch { stopSession(); stopSelf() }
-            ACTION_PAUSE -> control("Pause requested") { cast?.pause() ?: dlna?.pause() }
-            ACTION_PLAY -> control("Play requested") { cast?.play() ?: dlna?.play() }
+            ACTION_STOP, ACTION_PAUSE, ACTION_PLAY -> commands.trySend(intent.action!!)
         }
         return START_NOT_STICKY
     }
 
-    private fun control(status: String, command: suspend () -> Unit?) {
-        scope.launch {
-            runCatching { command() }
-                .onSuccess { _session.value?.let { publish(it.copy(status = status)) } }
-                .onFailure { _error.value = it.message ?: "Media command failed" }
-        }
+    private suspend fun control(status: String, command: suspend () -> Unit?) {
+        if (!active) return
+        runCatching { command() }
+            .onSuccess { _session.value?.let { publish(it.copy(status = status)) } }
+            .onFailure { _error.value = it.message ?: "Media command failed" }
     }
 
     private fun start(intent: Intent) {
